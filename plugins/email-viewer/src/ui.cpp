@@ -151,17 +151,19 @@ static void Note(const PluginStartupInfo& info, const wchar_t* text) {
     if (info.Message) info.Message(MainGuid, ErrorGuid, FMSG_MB_OK | FMSG_LEFTALIGN, nullptr, items, 2, 1);
 }
 
-static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wchar_t* title, const wchar_t* bottom, const std::vector<std::wstring>& lines, intptr_t selected = 0) {
+static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wchar_t* title, const wchar_t* bottom, const std::vector<std::wstring>& lines, intptr_t selected = 0, const FarKey* lastAccel = nullptr) {
     if (!info.Menu || lines.empty()) return -1;
     std::vector<FarMenuItem> items(lines.size());
     for (size_t i = 0; i < lines.size(); ++i) items[i].Text = lines[i].c_str();
     if (selected >= 0 && static_cast<size_t>(selected) < items.size())
         items[static_cast<size_t>(selected)].Flags = 0x10000; // MIF_SELECTED
+    if (lastAccel) items.back().AccelKey = *lastAccel;
     return info.Menu(MainGuid, guid, -1, -1, 0, 0x2, title, bottom, nullptr, nullptr, nullptr, items.data(), items.size());
 }
 
 static const PluginStartupInfo* g_settingsInfo = nullptr;
-static ULONGLONG g_ignoreEnterUntil = 0;
+static bool g_eatEnter = false;
+static bool g_seenEnter = false;
 
 static bool IsEnterDown(const void* param2) {
     if (!param2) return false;
@@ -172,32 +174,51 @@ static bool IsEnterDown(const void* param2) {
 
 static bool HostFilled(HANDLE dlg) {
     if (!g_settingsInfo || !g_settingsInfo->SendDlgMessage) return true;
-    const auto* host = reinterpret_cast<const wchar_t*>(
-        g_settingsInfo->SendDlgMessage(dlg, DM_GETCONSTTEXTPTR, 4, nullptr));
-    if (!host) return false;
+    wchar_t buffer[256]{};
+    FarDialogItemData data{};
+    data.StructSize = sizeof(data);
+    data.PtrLength = 255;
+    data.PtrData = buffer;
+    g_settingsInfo->SendDlgMessage(dlg, DM_GETTEXT, 4, &data);
+    const wchar_t* host = buffer;
     while (*host == L' ' || *host == L'\t') ++host;
     return *host != L'\0';
 }
 
+static void AskForHost(HANDLE dlg) {
+    if (!g_settingsInfo || !g_settingsInfo->SendDlgMessage) return;
+    const wchar_t* title = L" Укажите сервер ";
+    FarDialogItemData data{};
+    data.StructSize = sizeof(data);
+    data.PtrLength = static_cast<intptr_t>(wcslen(title));
+    data.PtrData = const_cast<wchar_t*>(title);
+    g_settingsInfo->SendDlgMessage(dlg, DM_SETTEXT, 0, &data);
+    g_settingsInfo->SendDlgMessage(dlg, DM_SETFOCUS, 4, nullptr);
+}
+
 static intptr_t WINAPI SettingsDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
     if (msg == DN_INITDIALOG) {
-        g_ignoreEnterUntil = GetTickCount64() + 500;
+        g_eatEnter = true;
+        g_seenEnter = false;
         if (g_settingsInfo && g_settingsInfo->SendDlgMessage)
             g_settingsInfo->SendDlgMessage(dlg, DM_SETINPUTNOTIFY, 1, nullptr);
     }
-    const bool opening = GetTickCount64() < g_ignoreEnterUntil;
-    if (opening && (msg == DN_INPUT || msg == DN_CONTROLINPUT) && IsEnterDown(param2))
+    if (msg == DN_BTNCLICK)
+        g_eatEnter = false;
+
+    if (g_eatEnter && (msg == DN_INPUT || msg == DN_CONTROLINPUT) && IsEnterDown(param2)) {
+        g_seenEnter = true;
         return msg == DN_INPUT ? 0 : 1;
-    if (msg == DN_CLOSE && param1 == 12 && (opening || !HostFilled(dlg))) {
-        if (!opening && g_settingsInfo && g_settingsInfo->SendDlgMessage) {
-            const wchar_t* title = L" Укажите сервер ";
-            FarDialogItemData data{};
-            data.StructSize = sizeof(data);
-            data.PtrLength = static_cast<intptr_t>(wcslen(title));
-            data.PtrData = const_cast<wchar_t*>(title);
-            g_settingsInfo->SendDlgMessage(dlg, DM_SETTEXT, 0, &data);
-            g_settingsInfo->SendDlgMessage(dlg, DM_SETFOCUS, 4, nullptr);
-        }
+    }
+    if (g_eatEnter && g_seenEnter && !(GetAsyncKeyState(VK_RETURN) & 0x8000))
+        g_eatEnter = false;
+    if (msg == DN_CLOSE && g_eatEnter && param1 >= 0 && param1 != 13) {
+        if (!(GetAsyncKeyState(VK_RETURN) & 0x8000))
+            g_eatEnter = false;
+        return 0;
+    }
+    if (msg == DN_CLOSE && param1 == 12 && !HostFilled(dlg)) {
+        AskForHost(dlg);
         return 0;
     }
     if (g_settingsInfo && g_settingsInfo->DefDlgProc)
@@ -262,7 +283,8 @@ bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
     items[13].Data = L"Отмена";
 
     g_settingsInfo = &info;
-    g_ignoreEnterUntil = GetTickCount64() + 500;
+    g_eatEnter = true;
+    g_seenEnter = false;
     HANDLE dialog = info.DialogInit(
         MainGuid, SettingsDialogGuid, -1, -1, 60, 17, nullptr, items, 14, 0, 0, SettingsDlgProc, 0);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) {
@@ -307,7 +329,8 @@ void ConfigureAccounts(const PluginStartupInfo& info, std::vector<ImapAccount>& 
         lines.push_back(L"Добавить учётную запись");
         if (selected < 0 || static_cast<size_t>(selected) >= lines.size())
             selected = static_cast<intptr_t>(lines.size() - 1);
-        const intptr_t pick = Pick(info, FolderListDialogGuid, L"Учётные записи", L"Enter — изменить или добавить, Esc — выход", lines, selected);
+        const FarKey addKey{ VK_F4, SHIFT_PRESSED };
+        const intptr_t pick = Pick(info, FolderListDialogGuid, L"Учётные записи", L"Shift+F4 — добавить, Enter — изменить, Esc — выход", lines, selected, &addKey);
         if (pick < 0) return;
         selected = pick;
         if (pick == static_cast<intptr_t>(accounts.size())) {
