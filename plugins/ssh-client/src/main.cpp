@@ -1,3 +1,4 @@
+#include "far/disk_hotkey.hpp"
 #include "far/plugin.hpp"
 #include "guid.hpp"
 #include "panel.hpp"
@@ -10,6 +11,7 @@ extern "C" {
 void WINAPI SetStartupInfoW(const PluginStartupInfo* info) {
     if (info) g_info = *info;
     StartupNetwork();
+    far_disk_hotkey::EnsureDriveHotkey(MainGuid, MenuGuid, L'6');
 }
 
 void WINAPI GetGlobalInfoW(GlobalInfo* info) {

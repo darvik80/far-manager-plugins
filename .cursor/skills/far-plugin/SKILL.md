@@ -30,7 +30,9 @@ Create is `Shift+F4`, edit is `F4`. Do not open the next dialog with Enter: that
 
 Official menu flags, not the low bits in the subset header: `MIF_SELECTED` `0x10000`, `MIF_SEPARATOR` `0x40000`, `FMENU_SHOWAMPERSAND` `0x1`, `FMENU_WRAPMODE` `0x2`. `Menu` returns the item index, or -1 on Esc.
 
-`ProcessPanelInputW` runs only for the plugin that owns the active panel. F3 on a normal file panel needs `ProcessConsoleInputW`. Plain F3 means no Ctrl/Alt/Shift. `ACTL_GETWINDOWTYPE` is 28: pass `WindowType { size_t StructSize; int Type; }`. Panels are `Type == 1`, or `Type == 0` and the call returned 1. Returning 1 swallows the key.
+The digit in Alt+F1/Alt+F2 is not part of `DiskMenu.Strings`. Far reads it from `%APPDATA%\Far Manager\Profile\pluginhotkeys.db`: `pluginkey` is the plugin Main GUID, `menuguid` is the disk-menu GUID, `type` 0 is the drive menu. `EnsureDriveHotkey` writes that row only when the hotkey is empty.
+
+`ProcessPanelInputW` runs only for the plugin that owns the active panel. F3 on a normal file panel needs `ProcessConsoleInputW`. Plain F3 means no Ctrl/Alt/Shift. F3 on the SSH panel is not seen by Markdown or Pretty Viewer; SSH downloads `.md`, `.json`, `.yaml`, `.yml`, and `.xml` and opens them with `Plugin.Command(pluginGuid, localPath)`. `ACTL_GETWINDOWTYPE` is 28: pass `WindowType { size_t StructSize; int Type; }`. Panels are `Type == 1`, or `Type == 0` and the call returned 1. Returning 1 swallows the key.
 
 ## Viewers
 

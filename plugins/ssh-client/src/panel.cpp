@@ -362,6 +362,109 @@ std::wstring CurrentName() {
     return item->FileName;
 }
 
+bool CurrentFile(std::wstring& name, bool& directory) {
+    if (!g_info.PanelControl) return false;
+    FarGetPanelItem query{};
+    query.StructSize = sizeof(query);
+    const intptr_t bytes = g_info.PanelControl(PANEL_ACTIVE, kGetCurrentItem, 0, &query);
+    if (bytes <= 0) return false;
+    std::vector<uint8_t> buffer(static_cast<size_t>(bytes));
+    auto* item = reinterpret_cast<PluginPanelItem*>(buffer.data());
+    query.Size = static_cast<size_t>(bytes);
+    query.Item = item;
+    if (g_info.PanelControl(PANEL_ACTIVE, kGetCurrentItem, 0, &query) == 0 || !item->FileName) return false;
+    name = item->FileName;
+    directory = (item->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    return true;
+}
+
+struct MacroValue {
+    int Type;
+    union {
+        long long Integer;
+        long long Boolean;
+        double Double;
+        const wchar_t* String;
+        const char* Bytes;
+        void* Pointer;
+        struct { void* Data; size_t Size; } Binary;
+        struct { MacroValue* Values; size_t Count; } Array;
+    };
+};
+
+struct MacroExec {
+    size_t StructSize;
+    unsigned long long Flags;
+    const wchar_t* SequenceText;
+    size_t InCount;
+    MacroValue* InValues;
+    size_t OutCount;
+    const MacroValue* OutValues;
+};
+
+bool RunMacro(const wchar_t* code, const wchar_t* pluginId, const wchar_t* path) {
+    if (!g_info.MacroControl) return false;
+    MacroValue in[2]{};
+    in[0].Type = 2;
+    in[0].String = pluginId;
+    size_t count = 1;
+    if (path) {
+        in[1].Type = 2;
+        in[1].String = path;
+        count = 2;
+    }
+    MacroExec exec{};
+    exec.StructSize = sizeof(exec);
+    exec.SequenceText = code;
+    exec.InCount = count;
+    exec.InValues = in;
+    if (!g_info.MacroControl(MainGuid, 10, 0, &exec) || !exec.OutCount || !exec.OutValues)
+        return false;
+    const MacroValue& out = exec.OutValues[0];
+    if (out.Type == 4) return out.Boolean != 0;
+    if (out.Type == 1) return out.Integer != 0;
+    return false;
+}
+
+const wchar_t* ViewerFor(const std::wstring& name) {
+    const auto dot = name.find_last_of(L'.');
+    if (dot == std::wstring::npos) return nullptr;
+    const std::wstring ext = Lower(name.substr(dot));
+    if (ext == L".md" || ext == L".markdown" || ext == L".mdown" || ext == L".mkd")
+        return L"E4B1428A-16D3-4F8C-9B2A-7D5F1C3E9A4B";
+    if (ext == L".json" || ext == L".yaml" || ext == L".yml" || ext == L".xml")
+        return L"C8E14A20-6F3B-4D91-A5E7-1B9C0D4F6A82";
+    return nullptr;
+}
+
+bool OpenInViewer(SshPanel* panel, const std::wstring& name) {
+    const wchar_t* pluginId = ViewerFor(name);
+    if (!pluginId) return false;
+    if (name.find_first_of(L"\\/:*?\"<>|") != std::wstring::npos) return false;
+    if (!RunMacro(L"local id = ...; return Plugin.Exist(id)", pluginId, nullptr))
+        return false;
+
+    wchar_t temp[MAX_PATH]{};
+    if (!GetTempPathW(MAX_PATH, temp)) return false;
+    std::wstring dir = temp;
+    if (dir.empty() || dir.back() != L'\\') dir += L'\\';
+    dir += L"FarSshView";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    const std::wstring local = JoinLocal(dir, name.c_str());
+    std::wstring error;
+    if (!panel->connection.Download(JoinRemote(panel->remote, Utf8(name)), local, false, error)) {
+        if (!error.empty()) Say(error.c_str());
+        return true;
+    }
+    // Plugin.Command yields. A direct macro call cannot yield across the C boundary,
+    // so queue it; Far runs the queued macro after this key returns.
+    if (!RunMacro(
+            L"local id, path = ...; return mf.postmacro(function(a, b) Plugin.Command(a, b) end, id, path)",
+            pluginId, local.c_str()))
+        return false;
+    return true;
+}
+
 void FillItem(PluginPanelItem& item, const std::wstring& name, bool directory, unsigned long long size, unsigned long mtime) {
     item.FileName = name.c_str();
     item.FileAttributes = directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
@@ -685,6 +788,14 @@ intptr_t WINAPI ProcessPanelInputW(const ProcessPanelInputInfo* info) {
         if (EditServer(edited, false)) Upsert(edited);
         if (g_info.PanelControl) g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
         return 1;
+    }
+    if (!panel->sites && key.wVirtualKeyCode == VK_F3 && !shift && !ctrl && !alt) {
+        std::wstring name;
+        bool directory = false;
+        if (!CurrentFile(name, directory) || directory || name == L".." || name == L".")
+            return 0;
+        if (OpenInViewer(panel, name))
+            return 1;
     }
     if (!panel->sites && key.wVirtualKeyCode == VK_F6 && !ctrl && !alt) {
         const std::wstring name = CurrentName();
