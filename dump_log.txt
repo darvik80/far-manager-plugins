@@ -1,6 +1,0 @@
-PID 8908 OpenProcess: 2456
-MiniDumpWriteDump: True err=6
-size: 83544435
-PID 20496 OpenProcess: 2624
-MiniDumpWriteDump: True err=6
-size: 82944474
