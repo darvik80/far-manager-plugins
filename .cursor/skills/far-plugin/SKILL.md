@@ -24,7 +24,7 @@ Install only through `install-plugin.bat <Name>` or `install-all.bat`. They elev
 
 A dialog proc that returns 0 for `DN_DRAWDIALOG` never paints and hangs the UI. Unhandled messages go to `Info.DefDlgProc`. A null proc is safe. Read edits with `DM_GETCONSTTEXTPTR` (63), checks with `DM_GETCHECK` (25, `BSTATE_CHECKED` is 1). `DialogInit(-1,-1,w,h)` centers. Password fields are `DI_PSWEDIT`.
 
-A new list entry is `Shift+F4` (`FarKey` `{VK_F4, SHIFT_PRESSED}` on the item `AccelKey`), the same create key as the panels. Enter that closed a menu is queued for the next dialog and activates `DIF_DEFAULTBUTTON` even after the key is up. A mouse click does not. Eat that Enter until a `DN_BTNCLICK` or until one Enter has been seen and the key is up. `DN_INPUT` (only after `DM_SETINPUTNOTIFY`, 49) returns 0 to consume; `DN_CONTROLINPUT` returns nonzero. Return 0 from `DN_CLOSE` for any other close while that Enter is still pending, including a close whose id is not the Save button. Do not clear the guard from `GetAsyncKeyState` before the queued key is handled. `DN_DRAWDIALOG` always goes to `DefDlgProc`.
+Create is `Shift+F4`, edit is `F4`. Do not open the next dialog with Enter: that key is still queued and activates `DIF_DEFAULTBUTTON`. A mouse click does not. Eat that Enter until a `DN_BTNCLICK` or until one Enter has been seen and the key is up. `DN_INPUT` (only after `DM_SETINPUTNOTIFY`, 49) returns 0 to consume; `DN_CONTROLINPUT` returns nonzero. Return 0 from `DN_CLOSE` for any other close while that Enter is still pending, including a close whose id is not the Save button. Do not clear the guard from `GetAsyncKeyState` before the queued key is handled. `DN_DRAWDIALOG` always goes to `DefDlgProc`.
 
 ## Menus and keys
 

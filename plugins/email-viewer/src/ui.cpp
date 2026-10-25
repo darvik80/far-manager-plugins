@@ -151,13 +151,12 @@ static void Note(const PluginStartupInfo& info, const wchar_t* text) {
     if (info.Message) info.Message(MainGuid, ErrorGuid, FMSG_MB_OK | FMSG_LEFTALIGN, nullptr, items, 2, 1);
 }
 
-static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wchar_t* title, const wchar_t* bottom, const std::vector<std::wstring>& lines, intptr_t selected = 0, const FarKey* lastAccel = nullptr) {
+static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wchar_t* title, const wchar_t* bottom, const std::vector<std::wstring>& lines, intptr_t selected = 0) {
     if (!info.Menu || lines.empty()) return -1;
     std::vector<FarMenuItem> items(lines.size());
     for (size_t i = 0; i < lines.size(); ++i) items[i].Text = lines[i].c_str();
     if (selected >= 0 && static_cast<size_t>(selected) < items.size())
         items[static_cast<size_t>(selected)].Flags = 0x10000; // MIF_SELECTED
-    if (lastAccel) items.back().AccelKey = *lastAccel;
     return info.Menu(MainGuid, guid, -1, -1, 0, 0x2, title, bottom, nullptr, nullptr, nullptr, items.data(), items.size());
 }
 
@@ -319,28 +318,108 @@ bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
     return saved && !account.settings.host.empty();
 }
 
+static intptr_t g_listAction = 0;
+static intptr_t g_listIndex = 0;
+
+static bool PlainKey(const INPUT_RECORD& rec, WORD key, bool shift) {
+    if (rec.EventType != KEY_EVENT || !rec.Event.KeyEvent.bKeyDown || rec.Event.KeyEvent.wVirtualKeyCode != key)
+        return false;
+    const auto state = rec.Event.KeyEvent.dwControlKeyState;
+    const bool isShift = (state & SHIFT_PRESSED) != 0;
+    const bool isCtrl = (state & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    const bool isAlt = (state & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+    return isShift == shift && !isCtrl && !isAlt;
+}
+
+static intptr_t WINAPI AccountsDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
+    if (msg == DN_CONTROLINPUT && param2 && g_settingsInfo && g_settingsInfo->SendDlgMessage) {
+        const auto& rec = *static_cast<const INPUT_RECORD*>(param2);
+        if (PlainKey(rec, VK_F4, true)) {
+            g_listAction = 2;
+            g_settingsInfo->SendDlgMessage(dlg, DM_CLOSE, 1, nullptr);
+            return 1;
+        }
+        if (PlainKey(rec, VK_F4, false) || (rec.EventType == MOUSE_EVENT && rec.Event.MouseEvent.dwEventFlags == DOUBLE_CLICK)) {
+            g_listAction = 1;
+            g_listIndex = g_settingsInfo->SendDlgMessage(dlg, DM_LISTGETCURPOS, 1, nullptr);
+            g_settingsInfo->SendDlgMessage(dlg, DM_CLOSE, 1, nullptr);
+            return 1;
+        }
+        if (PlainKey(rec, VK_RETURN, false))
+            return 1;
+    }
+    if (g_settingsInfo && g_settingsInfo->DefDlgProc)
+        return g_settingsInfo->DefDlgProc(dlg, msg, param1, param2);
+    return 1;
+}
+
 void ConfigureAccounts(const PluginStartupInfo& info, std::vector<ImapAccount>& accounts) {
-    intptr_t selected = static_cast<intptr_t>(accounts.size());
+    intptr_t selected = 0;
     for (;;) {
         std::vector<std::wstring> lines;
-        lines.reserve(accounts.size() + 1);
+        lines.reserve(accounts.empty() ? 1 : accounts.size());
         for (const auto& account : accounts)
             lines.push_back(account.name.empty() ? account.settings.host : account.name);
-        lines.push_back(L"Добавить учётную запись");
-        if (selected < 0 || static_cast<size_t>(selected) >= lines.size())
-            selected = static_cast<intptr_t>(lines.size() - 1);
-        const FarKey addKey{ VK_F4, SHIFT_PRESSED };
-        const intptr_t pick = Pick(info, FolderListDialogGuid, L"Учётные записи", L"Shift+F4 — добавить, Enter — изменить, Esc — выход", lines, selected, &addKey);
-        if (pick < 0) return;
-        selected = pick;
-        if (pick == static_cast<intptr_t>(accounts.size())) {
+        const wchar_t* empty = L"(нет записей)";
+        if (lines.empty()) lines.push_back(empty);
+
+        std::vector<FarListItem> listItems(lines.size());
+        for (size_t i = 0; i < lines.size(); ++i) {
+            listItems[i].Text = lines[i].c_str();
+            if (accounts.empty()) listItems[i].Flags = 0x80000; // LIF_DISABLE
+            else if (static_cast<intptr_t>(i) == selected) listItems[i].Flags = 0x10000; // LIF_SELECTED
+        }
+        FarList list{};
+        list.StructSize = sizeof(list);
+        list.ItemsNumber = listItems.size();
+        list.Items = listItems.data();
+
+        FarDialogItem items[3]{};
+        items[0].Type = DI_DOUBLEBOX;
+        items[0].X1 = 0;
+        items[0].Y1 = 0;
+        items[0].X2 = 57;
+        items[0].Y2 = 13;
+        items[0].Data = L" Учётные записи ";
+        items[1].Type = DI_LISTBOX;
+        items[1].X1 = 2;
+        items[1].Y1 = 1;
+        items[1].X2 = 54;
+        items[1].Y2 = 10;
+        items[1].Flags = DIF_LISTNOCLOSE | DIF_FOCUS;
+        items[1].Param.ListItems = &list;
+        items[2].Type = DI_TEXT;
+        items[2].X1 = 2;
+        items[2].Y1 = 11;
+        items[2].Data = L"F4 — изменить, Shift+F4 — добавить, Esc — выход";
+
+        g_listAction = 0;
+        g_settingsInfo = &info;
+        HANDLE dialog = info.DialogInit(
+            MainGuid, FolderListDialogGuid, -1, -1, 58, 14, nullptr, items, 3, 0, 0, AccountsDlgProc, 0);
+        if (!dialog || dialog == INVALID_HANDLE_VALUE) {
+            g_settingsInfo = nullptr;
+            return;
+        }
+        const intptr_t result = info.DialogRun(dialog);
+        info.DialogFree(dialog);
+        g_settingsInfo = nullptr;
+        if (result < 0 || g_listAction == 0) return;
+
+        if (g_listAction == 2) {
             ImapAccount account;
             account.settings.port = 993;
             account.settings.useSSL = true;
-            if (ShowSettingsDialog(info, account)) accounts.push_back(std::move(account));
+            if (ShowSettingsDialog(info, account)) {
+                accounts.push_back(std::move(account));
+                selected = static_cast<intptr_t>(accounts.size() - 1);
+            }
             continue;
         }
-        ShowSettingsDialog(info, accounts[static_cast<size_t>(pick)]);
+        if (accounts.empty() || g_listIndex < 0 || static_cast<size_t>(g_listIndex) >= accounts.size())
+            continue;
+        selected = g_listIndex;
+        ShowSettingsDialog(info, accounts[static_cast<size_t>(g_listIndex)]);
     }
 }
 

@@ -23,9 +23,17 @@ jobs:
         cmake-version: '4.2'
 
     - name: Setup OpenSSL
+      shell: pwsh
       run: |
-        choco install openssl -y
-        echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+        $root = 'C:\Program Files\OpenSSL'
+        if (-not (Test-Path "$root\include\openssl\ssl.h")) {
+          Get-ChildItem 'C:\Program Files' -Directory -Filter 'OpenSSL*' | ForEach-Object { $_.FullName }
+          throw "OpenSSL headers were not found in $root"
+        }
+        $libs = @(Get-ChildItem $root -Recurse -Filter 'libcrypto.lib' | Select-Object -ExpandProperty FullName)
+        if ($libs.Count -eq 0) { throw "libcrypto.lib was not found under $root" }
+        $libs | ForEach-Object { Write-Host $_ }
+        "OPENSSL_ROOT_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
 
     - name: Configure
       run: cmake -B build -S . -G "Visual Studio 18 2026" -A x64
@@ -41,6 +49,8 @@ jobs:
         foreach ($name in @('EmailViewer', 'MarkdownViewer', 'PrettyViewer', 'SshClient')) {
           Copy-Item "build\plugins\$name\Release\$name.dll" "release-package\$name.dll"
         }
+        Get-ChildItem 'C:\Program Files\OpenSSL\bin' -Include 'libcrypto-*-x64.dll','libssl-*-x64.dll' -Recurse |
+          Copy-Item -Destination release-package
         @'
         @echo off
         setlocal enabledelayedexpansion
@@ -55,6 +65,8 @@ jobs:
             set "DEST_DIR=%INSTALL_DIR%\%%p"
             if not exist "!DEST_DIR!" mkdir "!DEST_DIR!"
             copy /y "%~dp0%%p.dll" "!DEST_DIR!\" >nul
+            copy /y "%~dp0libcrypto-*-x64.dll" "!DEST_DIR!\" >nul
+            copy /y "%~dp0libssl-*-x64.dll" "!DEST_DIR!\" >nul
             if errorlevel 1 (echo [FAIL] %%p) else (echo [OK] %%p)
         )
         echo Done.
