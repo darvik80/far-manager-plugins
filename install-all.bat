@@ -14,7 +14,7 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-for %%p in (EmailViewer MarkdownViewer SshClient) do (
+for %%p in (EmailViewer MarkdownViewer PrettyViewer SshClient) do (
     set "DLL_FILE=%BUILD_DIR%\%%p\Release\%%p.dll"
     set "DEST_DIR=%INSTALL_DIR%\%%p"
 

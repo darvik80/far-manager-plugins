@@ -1,0 +1,11 @@
+LIBRARY PrettyViewer
+EXPORTS
+    SetStartupInfoW       @1
+    GetGlobalInfoW        @2
+    GetPluginInfoW        @3
+    OpenW                 @4
+    ConfigureW            @5
+    ExitFARW              @6
+    GetMinFarVersionW     @7
+    ProcessPanelInputW    @8
+    ProcessConsoleInputW  @9
