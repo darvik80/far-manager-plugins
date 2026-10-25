@@ -1,0 +1,9 @@
+LIBRARY "EmailViewer"
+EXPORTS
+    SetStartupInfoW
+    GetGlobalInfoW
+    GetMinFarVersionW
+    GetPluginInfoW
+    OpenW
+    ConfigureW
+    ExitFARW

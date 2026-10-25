@@ -1,0 +1,19 @@
+LIBRARY SshClient
+EXPORTS
+    SetStartupInfoW     @1
+    GetGlobalInfoW      @2
+    GetPluginInfoW      @3
+    OpenW               @4
+    ConfigureW          @5
+    ExitFARW            @6
+    GetMinFarVersionW   @7
+    ClosePanelW         @8
+    GetFindDataW        @9
+    FreeFindDataW       @10
+    SetDirectoryW       @11
+    GetOpenPanelInfoW   @12
+    GetFilesW           @13
+    PutFilesW           @14
+    DeleteFilesW        @15
+    MakeDirectoryW      @16
+    ProcessPanelInputW  @17

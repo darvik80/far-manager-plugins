@@ -1,0 +1,189 @@
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*C:\symbols*https://msdl.microsoft.com/download/symbols
+OK                                             C:\Program Files\Far Manager\Plugins\MarkdownViewer
+OK                                             D:\Projects\cpp\far-manager\build-msvc\plugins\MarkdownViewer\Debug
+Opened log file 'stacks_8908.txt'
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.032 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 46
+
+Microsoft (R) Windows Debugger Version 10.0.29661.1004 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [D:\Projects\cpp\far-manager\far_hang_8908.dmp]
+User Mini Dump File with Full Memory : Only application data is available
+
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*C:\symbols*https://msdl.microsoft.com/download/symbols
+OK                                             C:\Program Files\Far Manager\Plugins\MarkdownViewer
+OK                                             D:\Projects\cpp\far-manager\build-msvc\plugins\MarkdownViewer\Debug
+Symbol search path is: srv*C:\symbols*https://msdl.microsoft.com/download/symbols;C:\Program Files\Far Manager\Plugins\MarkdownViewer;D:\Projects\cpp\far-manager\build-msvc\plugins\MarkdownViewer\Debug
+Executable search path is: 
+Windows 10 Version 26300 MP (12 procs) Free x64
+Product: WinNt, suite: SingleUserTS Personal
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Debug session time: Sun Oct 25 13:35:06.000 2026 (UTC + 7:00)
+System Uptime: 0 days 2:32:51.566
+Process Uptime: 0 days 0:03:42.000
+.NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\atlmfc.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\concurrency.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\cpp_rest.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\ObjectiveC.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\stl.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\Windows.Data.Json.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\Windows.Devices.Geolocation.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\Windows.Devices.Sensors.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\Windows.Media.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\windows.natvis'
+NatVis script successfully loaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\winrt.natvis'
+...................................................
+Loading unloaded module list
+..
+
++------------------------------------------------------------------------+
+| This target supports Hardware-enforced Stack Protection. A HW based    |
+| "Shadow Stack" may be available to assist in debugging and analysis.   |
+| See aka.ms/userhsp for more info.                                      |
+|                                                                        |
+| dps @ssp                                                               |
+|                                                                        |
++------------------------------------------------------------------------+
+
+For analysis of this file, run !analyze -v
+ntdll!NtWaitForMultipleObjects+0x14:
+00007ffc`58a628a4 c3              ret
+0:000> ~*k 60; q
+
+.  0  Id: 22cc.4ed0 Suspend: 0 Teb: 0000007f`c433a000 Unfrozen "Main Thread"
+Child-SP          RetAddr               Call Site
+0000007f`c419ad48 00007ffc`55ae2773     ntdll!NtWaitForMultipleObjects+0x14
+0000007f`c419ad50 00007ffc`55ae2641     KERNELBASE!WaitForMultipleObjectsEx+0x123
+0000007f`c419b040 00007ff6`d038d376     KERNELBASE!WaitForMultipleObjects+0x11
+0000007f`c419b080 00007ff6`d03310b0     Far+0x26d376
+0000007f`c419b660 00007ff6`d0331bf9     Far+0x2110b0
+0000007f`c419bb10 00007ff6`d036477a     Far+0x211bf9
+0000007f`c419bba0 00007ff6`d0362bdf     Far+0x24477a
+0000007f`c419bc40 00007ff6`d01f4415     Far+0x242bdf
+0000007f`c419bcb0 00007ff6`d03d8b0f     Far+0xd4415
+0000007f`c419bd00 00007ff6`d0254bc6     Far+0x2b8b0f
+0000007f`c419bd30 00007ff6`d03cdaa5     Far+0x134bc6
+*** WARNING: Unable to verify checksum for MarkdownViewer.dll
+0000007f`c419bd70 00007ffb`d31949bb     Far+0x2adaa5
+0000007f`c419be30 00007ffb`d3187a54     MarkdownViewer!std::allocator<std::_Container_proxy>::allocator<std::_Container_proxy><StyledLine>+0x1b
+0000007f`c419c1b0 00007ff6`d03c8099     MarkdownViewer!thunk@7ffbd31877b6+0x29e
+0000007f`c419c380 00007ff6`d03c7d15     Far+0x2a8099
+0000007f`c419c3b0 00007ff6`d0254bc6     Far+0x2a7d15
+0000007f`c419c3f0 00007ff6`d03c7e61     Far+0x134bc6
+0000007f`c419c430 00007ff6`d0254bf8     Far+0x2a7e61
+0000007f`c419c4f0 00007ff6`d03c47e4     Far+0x134bf8
+0000007f`c419c530 00007ff6`d0406204     Far+0x2a47e4
+0000007f`c419c640 00007ff6`d0400e4c     Far+0x2e6204
+0000007f`c419c6a0 00007ff6`d03658e2     Far+0x2e0e4c
+0000007f`c419ca40 00007ff6`d036514a     Far+0x2458e2
+0000007f`c419cb00 00007ff6`d0185643     Far+0x24514a
+0000007f`c419cbd0 00007ff6`d02bcc8b     Far+0x65643
+0000007f`c419e410 00007ff6`d0365446     Far+0x19cc8b
+0000007f`c419e760 00007ff6`d0364803     Far+0x245446
+0000007f`c419e830 00007ff6`d0364727     Far+0x244803
+0000007f`c419e8d0 00007ff6`d035b332     Far+0x244727
+0000007f`c419e910 00007ff6`d0360321     Far+0x23b332
+0000007f`c419ec70 00007ff6`d0360c52     Far+0x240321
+0000007f`c419ed30 00007ff6`d0254bc6     Far+0x240c52
+0000007f`c419ed60 00007ff6`d035fe10     Far+0x134bc6
+0000007f`c419eda0 00007ff6`d03607a9     Far+0x23fe10
+0000007f`c419f660 00007ff6`d0360cd2     Far+0x2407a9
+0000007f`c419f6b0 00007ff6`d0254bc6     Far+0x240cd2
+0000007f`c419f6e0 00007ff6`d03606cf     Far+0x134bc6
+0000007f`c419f720 00007ff6`d0360d5c     Far+0x2406cf
+0000007f`c419f890 00007ff6`d0254bf8     Far+0x240d5c
+0000007f`c419f8c0 00007ff6`d036090d     Far+0x134bf8
+0000007f`c419f900 00007ff6`d049d878     Far+0x24090d
+0000007f`c419f9b0 00007ffc`5758dda7     Far+0x37d878
+0000007f`c419f9f0 00007ffc`5897ee4c     kernel32!BaseThreadInitThunk+0x17
+0000007f`c419fa20 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   1  Id: 22cc.1c3c Suspend: 0 Teb: 0000007f`c4342000 Unfrozen "Window messages processor"
+Child-SP          RetAddr               Call Site
+0000007f`c47fe568 00007ffc`573aaea2     win32u!NtUserGetMessage+0x14
+0000007f`c47fe570 00007ff6`d0495172     user32!GetMessageW+0x22
+0000007f`c47fe5d0 00007ff6`d0495b3b     Far+0x375172
+0000007f`c47ff850 00007ff6`d04b9053     Far+0x375b3b
+0000007f`c47ff880 00007ffc`5758dda7     Far+0x399053
+0000007f`c47ff8b0 00007ffc`5897ee4c     kernel32!BaseThreadInitThunk+0x17
+0000007f`c47ff8e0 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   2  Id: 22cc.3358 Suspend: 0 Teb: 0000007f`c434a000 Unfrozen "FS watcher"
+Child-SP          RetAddr               Call Site
+0000007f`c48febc8 00007ffc`55adbe9f     ntdll!NtWaitForSingleObject+0x14
+0000007f`c48febd0 00007ff6`d038d0a6     KERNELBASE!WaitForSingleObjectEx+0xaf
+0000007f`c48fec70 00007ff6`d02c4c88     Far+0x26d0a6
+0000007f`c48ff210 00007ff6`d02c6fd7     Far+0x1a4c88
+0000007f`c48ff7b0 00007ff6`d04b9053     Far+0x1a6fd7
+0000007f`c48ff7e0 00007ffc`5758dda7     Far+0x399053
+0000007f`c48ff810 00007ffc`5897ee4c     kernel32!BaseThreadInitThunk+0x17
+0000007f`c48ff840 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   3  Id: 22cc.52ac Suspend: 0 Teb: 0000007f`c434c000 Unfrozen "Taskbar processor"
+Child-SP          RetAddr               Call Site
+0000007f`c49fe588 00007ffc`55ae2773     ntdll!NtWaitForMultipleObjects+0x14
+0000007f`c49fe590 00007ffc`55ae2641     KERNELBASE!WaitForMultipleObjectsEx+0x123
+0000007f`c49fe880 00007ff6`d038d376     KERNELBASE!WaitForMultipleObjects+0x11
+0000007f`c49fe8c0 00007ff6`d0455510     Far+0x26d376
+0000007f`c49feea0 00007ff6`d02c6fd7     Far+0x335510
+0000007f`c49ffec0 00007ff6`d04b9053     Far+0x1a6fd7
+0000007f`c49ffef0 00007ffc`5758dda7     Far+0x399053
+0000007f`c49fff20 00007ffc`5897ee4c     kernel32!BaseThreadInitThunk+0x17
+0000007f`c49fff50 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   4  Id: 22cc.1098 Suspend: 0 Teb: 0000007f`c4352000 Unfrozen "Async history config"
+Child-SP          RetAddr               Call Site
+0000007f`c4afef68 00007ffc`55ae2773     ntdll!NtWaitForMultipleObjects+0x14
+0000007f`c4afef70 00007ffc`55ae2641     KERNELBASE!WaitForMultipleObjectsEx+0x123
+0000007f`c4aff260 00007ff6`d038d376     KERNELBASE!WaitForMultipleObjects+0x11
+0000007f`c4aff2a0 00007ff6`d019c52c     Far+0x26d376
+0000007f`c4aff880 00007ff6`d01aaa01     Far+0x7c52c
+0000007f`c4affa20 00007ff6`d04b9053     Far+0x8aa01
+0000007f`c4affa50 00007ffc`5758dda7     Far+0x399053
+0000007f`c4affa80 00007ffc`5897ee4c     kernel32!BaseThreadInitThunk+0x17
+0000007f`c4affab0 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+
+   5  Id: 22cc.1c90 Suspend: 0 Teb: 0000007f`c4354000 Unfrozen
+Child-SP          RetAddr               Call Site
+0000007f`c44ff768 00007ffc`58924d0e     ntdll!NtWaitForWorkViaWorkerFactory+0x14
+0000007f`c44ff770 00007ffc`5758dda7     ntdll!TppWorkerThread+0x37e
+0000007f`c44ffad0 00007ffc`5897ee4c     kernel32!BaseThreadInitThunk+0x17
+0000007f`c44ffb00 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+quit:
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\atlmfc.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\concurrency.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\cpp_rest.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\ObjectiveC.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\stl.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\Windows.Data.Json.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\Windows.Devices.Geolocation.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\Windows.Devices.Sensors.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\Windows.Media.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\windows.natvis'
+NatVis script unloaded from 'C:\Program Files\WindowsApps\Microsoft.WinDbg_1.2610.1001.0_x64__8wekyb3d8bbwe\amd64\Visualizers\winrt.natvis'

@@ -1,0 +1,26 @@
+# Build directories
+build-msvc/
+build/
+cmake-build-debug/
+
+# IDE
+.idea/
+.vs/
+*.user
+*.suo
+
+# Compiled files
+*.dll
+*.lib
+*.obj
+*.exe
+*.pdb
+
+# Install scripts (local only)
+install-plugin.bat
+uninstall-plugin.bat
+install-all.bat
+uninstall-all.bat
+install-email-viewer.bat
+install-minimal-plugin.bat
+install-msvc-only.bat

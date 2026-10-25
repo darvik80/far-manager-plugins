@@ -1,0 +1,337 @@
+#include "ui.hpp"
+#include "html_converter.hpp"
+#include "guid.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <vector>
+#include <string>
+#include <cstring>
+
+static std::wstring utf8ToWide(const std::string& s) {
+    if (s.empty()) return L"";
+    int needed = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    std::wstring result(needed, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &result[0], needed);
+    return result;
+}
+
+static int HexValue(char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
+static std::string Base64Decode(std::string text) {
+    for (char& ch : text)
+        if (ch == ',') ch = '/';
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int value = 0;
+    int bits = 0;
+    for (unsigned char ch : text) {
+        if (ch == '=' || ch == '\r' || ch == '\n' || ch == ' ' || ch == '\t') continue;
+        const char* found = std::strchr(alphabet, ch);
+        if (!found) continue;
+        value = (value << 6) | static_cast<int>(found - alphabet);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((value >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+static UINT CodePageOf(std::string charset) {
+    for (char& ch : charset) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (charset.find("1251") != std::string::npos) return 1251;
+    if (charset.find("koi8") != std::string::npos) return 20866;
+    if (charset.find("866") != std::string::npos) return 866;
+    if (charset.find("8859-1") != std::string::npos || charset.find("latin1") != std::string::npos) return 28591;
+    return CP_UTF8;
+}
+
+static std::wstring BytesToWide(const std::string& bytes, const std::string& charset) {
+    if (bytes.empty()) return {};
+    const UINT codePage = CodePageOf(charset);
+    const int chars = MultiByteToWideChar(codePage, 0, bytes.c_str(), static_cast<int>(bytes.size()), nullptr, 0);
+    if (chars <= 0) return utf8ToWide(bytes);
+    std::wstring out(chars, L'\0');
+    MultiByteToWideChar(codePage, 0, bytes.c_str(), static_cast<int>(bytes.size()), out.data(), chars);
+    return out;
+}
+
+static std::wstring DecodeHeader(const std::string& text) {
+    std::wstring out;
+    for (size_t i = 0; i < text.size();) {
+        if (text[i] != '=' || i + 1 >= text.size() || text[i + 1] != '?') {
+            out.push_back(static_cast<unsigned char>(text[i]));
+            ++i;
+            continue;
+        }
+        const size_t charsetEnd = text.find('?', i + 2);
+        const size_t methodEnd = charsetEnd == std::string::npos ? std::string::npos : text.find('?', charsetEnd + 1);
+        const size_t dataEnd = methodEnd == std::string::npos ? std::string::npos : text.find("?=", methodEnd + 1);
+        if (charsetEnd == std::string::npos || methodEnd == std::string::npos || dataEnd == std::string::npos) {
+            out.push_back(static_cast<unsigned char>(text[i]));
+            ++i;
+            continue;
+        }
+        const std::string charset = text.substr(i + 2, charsetEnd - (i + 2));
+        const char method = static_cast<char>(std::toupper(static_cast<unsigned char>(text[charsetEnd + 1])));
+        std::string data = text.substr(methodEnd + 1, dataEnd - (methodEnd + 1));
+        std::string bytes;
+        if (method == 'B') {
+            bytes = Base64Decode(data);
+        } else {
+            for (size_t j = 0; j < data.size(); ++j) {
+                if (data[j] == '_') {
+                    bytes.push_back(' ');
+                } else if (data[j] == '=' && j + 2 < data.size() && HexValue(data[j + 1]) >= 0 && HexValue(data[j + 2]) >= 0) {
+                    bytes.push_back(static_cast<char>((HexValue(data[j + 1]) << 4) | HexValue(data[j + 2])));
+                    j += 2;
+                } else {
+                    bytes.push_back(data[j]);
+                }
+            }
+        }
+        out += BytesToWide(bytes, charset);
+        i = dataEnd + 2;
+        while (i < text.size() && (text[i] == ' ' || text[i] == '\t')) {
+            size_t look = i;
+            while (look < text.size() && (text[look] == ' ' || text[look] == '\t')) ++look;
+            if (look + 1 < text.size() && text[look] == '=' && text[look + 1] == '?') i = look;
+            else break;
+        }
+    }
+    return out;
+}
+
+static std::wstring DecodeMailboxName(const std::string& name) {
+    std::wstring out;
+    for (size_t i = 0; i < name.size();) {
+        if (name[i] != '&') {
+            out.push_back(static_cast<unsigned char>(name[i]));
+            ++i;
+            continue;
+        }
+        if (i + 1 < name.size() && name[i + 1] == '-') {
+            out.push_back(L'&');
+            i += 2;
+            continue;
+        }
+        const size_t end = name.find('-', i + 1);
+        if (end == std::string::npos) {
+            out.push_back(static_cast<unsigned char>(name[i]));
+            ++i;
+            continue;
+        }
+        const std::string bytes = Base64Decode(name.substr(i + 1, end - i - 1));
+        for (size_t j = 0; j + 1 < bytes.size(); j += 2)
+            out.push_back(static_cast<wchar_t>((static_cast<unsigned char>(bytes[j]) << 8) | static_cast<unsigned char>(bytes[j + 1])));
+        i = end + 1;
+    }
+    return out;
+}
+
+static std::wstring Person(const std::string& header) {
+    std::wstring text = DecodeHeader(header);
+    const auto bracket = text.find(L'<');
+    if (bracket != std::wstring::npos && bracket > 1) text.resize(bracket);
+    while (!text.empty() && (text.back() == L' ' || text.back() == L'"')) text.pop_back();
+    while (!text.empty() && (text.front() == L' ' || text.front() == L'"')) text.erase(text.begin());
+    return text.empty() ? L"(нет адреса)" : text;
+}
+
+static void Note(const PluginStartupInfo& info, const wchar_t* text) {
+    const wchar_t* items[] = { L"Почта", text };
+    if (info.Message) info.Message(MainGuid, ErrorGuid, FMSG_MB_OK | FMSG_LEFTALIGN, nullptr, items, 2, 1);
+}
+
+static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wchar_t* title, const wchar_t* bottom, const std::vector<std::wstring>& lines) {
+    if (!info.Menu || lines.empty()) return -1;
+    std::vector<FarMenuItem> items(lines.size());
+    for (size_t i = 0; i < lines.size(); ++i) items[i].Text = lines[i].c_str();
+    return info.Menu(MainGuid, guid, -1, -1, 0, 0x2, title, bottom, nullptr, nullptr, nullptr, items.data(), items.size());
+}
+
+bool ShowSettingsDialog(const PluginStartupInfo& info, ImapSettings& settings) {
+    wchar_t host[256]{};
+    wchar_t port[16]{};
+    wchar_t login[256]{};
+    wchar_t password[256]{};
+    wcsncpy_s(host, settings.host.c_str(), _TRUNCATE);
+    wcsncpy_s(port, std::to_wstring(settings.port ? settings.port : 993).c_str(), _TRUNCATE);
+    wcsncpy_s(login, settings.login.c_str(), _TRUNCATE);
+    wcsncpy_s(password, settings.password.c_str(), _TRUNCATE);
+
+    FarDialogItem items[12]{};
+    items[0].Type = DI_DOUBLEBOX;
+    items[0].X1 = 0;
+    items[0].Y1 = 0;
+    items[0].X2 = 59;
+    items[0].Y2 = 14;
+    items[0].Data = L" Почта ";
+
+    const wchar_t* labels[] = { L"Сервер:", L"Порт:", L"Логин:", L"Пароль:" };
+    wchar_t* buffers[] = { host, port, login, password };
+    const int kinds[] = { DI_EDIT, DI_EDIT, DI_EDIT, DI_PSWEDIT };
+    const intptr_t lengths[] = { 255, 15, 255, 255 };
+    for (int i = 0; i < 4; ++i) {
+        items[1 + i * 2].Type = DI_TEXT;
+        items[1 + i * 2].X1 = 2;
+        items[1 + i * 2].Y1 = 2 + i * 2;
+        items[1 + i * 2].Data = labels[i];
+        items[2 + i * 2].Type = kinds[i];
+        items[2 + i * 2].X1 = 14;
+        items[2 + i * 2].Y1 = 2 + i * 2;
+        items[2 + i * 2].X2 = 56;
+        items[2 + i * 2].Data = buffers[i];
+        items[2 + i * 2].MaxLength = lengths[i];
+    }
+
+    items[9].Type = DI_CHECKBOX;
+    items[9].X1 = 2;
+    items[9].Y1 = 10;
+    items[9].Param.Selected = settings.useSSL ? 1 : 0;
+    items[9].Data = L"SSL";
+
+    items[10].Type = DI_BUTTON;
+    items[10].X1 = 16;
+    items[10].Y1 = 12;
+    items[10].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
+    items[10].Data = L"Сохранить";
+
+    items[11].Type = DI_BUTTON;
+    items[11].X1 = 28;
+    items[11].Y1 = 12;
+    items[11].Flags = DIF_CENTERGROUP;
+    items[11].Data = L"Отмена";
+
+    HANDLE dialog = info.DialogInit(
+        MainGuid, SettingsDialogGuid, -1, -1, 60, 15, nullptr, items, 12, 0, 0, nullptr, 0);
+    if (!dialog || dialog == INVALID_HANDLE_VALUE) return false;
+
+    const intptr_t result = info.DialogRun(dialog);
+    const bool saved = result == 10;
+    if (saved && info.SendDlgMessage) {
+        auto text = [&](int id) -> std::wstring {
+            const wchar_t* value = reinterpret_cast<const wchar_t*>(
+                info.SendDlgMessage(dialog, DM_GETCONSTTEXTPTR, id, nullptr));
+            return value ? value : L"";
+        };
+        settings.host = text(2);
+        settings.login = text(6);
+        settings.password = text(8);
+        settings.useSSL = info.SendDlgMessage(dialog, DM_GETCHECK, 9, nullptr) == 1;
+        try {
+            settings.port = std::stoi(text(4));
+        } catch (...) {
+            settings.port = settings.useSSL ? 993 : 143;
+        }
+        if (settings.port <= 0) settings.port = settings.useSSL ? 993 : 143;
+    }
+    info.DialogFree(dialog);
+    return saved && !settings.host.empty();
+}
+
+void ShowAccountList(const PluginStartupInfo& info, const std::vector<ImapAccount>& accounts, int& selectedIndex) {
+    selectedIndex = -1;
+    std::vector<std::wstring> lines;
+    lines.reserve(accounts.size());
+    for (const auto& account : accounts) lines.push_back(account.name);
+    const intptr_t pick = Pick(info, FolderListDialogGuid, L"Учётные записи", L"Enter — выбрать, Esc — назад", lines);
+    if (pick >= 0 && pick < static_cast<intptr_t>(accounts.size())) selectedIndex = static_cast<int>(pick);
+}
+
+void ShowFolderList(const PluginStartupInfo& info, ImapClient& client, std::string& selectedFolder) {
+    selectedFolder.clear();
+    const auto folders = client.listFolders();
+    if (folders.empty()) {
+        Note(info, L"На сервере нет папок.");
+        return;
+    }
+    struct ShownFolder {
+        std::wstring title;
+        std::string name;
+    };
+    std::vector<ShownFolder> shown;
+    shown.reserve(folders.size());
+    for (const auto& folder : folders)
+        shown.push_back({ DecodeMailboxName(folder.name), folder.name });
+    std::sort(shown.begin(), shown.end(), [](const ShownFolder& a, const ShownFolder& b) {
+        const bool aInbox = _stricmp(a.name.c_str(), "INBOX") == 0;
+        const bool bInbox = _stricmp(b.name.c_str(), "INBOX") == 0;
+        if (aInbox != bInbox) return aInbox;
+        return _wcsicmp(a.title.c_str(), b.title.c_str()) < 0;
+    });
+    std::vector<std::wstring> lines;
+    lines.reserve(shown.size());
+    for (const auto& folder : shown) lines.push_back(folder.title);
+    const intptr_t pick = Pick(info, FolderListDialogGuid, L"Папки", L"Enter — открыть, Esc — назад", lines);
+    if (pick >= 0 && pick < static_cast<intptr_t>(shown.size())) selectedFolder = shown[pick].name;
+}
+
+static std::wstring Fit(std::wstring text, size_t width) {
+    if (text.size() > width) text.resize(width);
+    while (text.size() < width) text.push_back(L' ');
+    return text;
+}
+
+void ShowMessageList(const PluginStartupInfo& info, ImapClient& client, const std::string& folder) {
+    const auto messages = client.listMessages(folder);
+    if (messages.empty()) {
+        Note(info, L"В папке нет писем.");
+        return;
+    }
+    const std::wstring title = DecodeMailboxName(folder);
+    std::vector<std::wstring> lines;
+    lines.reserve(messages.size());
+    for (const auto& message : messages) {
+        std::wstring date = utf8ToWide(message.date);
+        if (date.size() > 11) date.resize(11);
+        const std::wstring subject = DecodeHeader(message.subject.empty() ? "(без темы)" : message.subject);
+        lines.push_back(Fit(date, 12) + Fit(Person(message.from), 24) + subject);
+    }
+    while (true) {
+        const intptr_t pick = Pick(info, MessageListDialogGuid, title.c_str(), L"Enter — читать, Esc — к папкам", lines);
+        if (pick < 0 || pick >= static_cast<intptr_t>(messages.size())) return;
+        ShowMessageView(info, client.fetchMessage(folder, messages[pick].uid));
+    }
+}
+
+void ShowMessageView(const PluginStartupInfo& info, const ImapMessageBody& msg) {
+    const std::string plain = msg.textBody.empty() ? htmlToPlainText(msg.htmlBody) : msg.textBody;
+    const std::wstring subject = DecodeHeader(msg.subject.empty() ? "(без темы)" : msg.subject);
+    std::wstring text;
+    text += L"От: " + Person(msg.from) + L"\r\n";
+    text += L"Кому: " + DecodeHeader(msg.to) + L"\r\n";
+    text += L"Тема: " + subject + L"\r\n";
+    text += L"Дата: " + utf8ToWide(msg.date) + L"\r\n";
+    text += L"\r\n";
+    text += utf8ToWide(plain);
+
+    wchar_t directory[MAX_PATH]{};
+    wchar_t path[MAX_PATH]{};
+    if (!GetTempPathW(MAX_PATH, directory) || !GetTempFileNameW(directory, L"eml", 0, path)) {
+        Note(info, L"Не удалось открыть письмо.");
+        return;
+    }
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path, L"wb") != 0 || !file) {
+        Note(info, L"Не удалось открыть письмо.");
+        return;
+    }
+    const unsigned char bom[] = { 0xFF, 0xFE };
+    fwrite(bom, 1, sizeof(bom), file);
+    fwrite(text.data(), sizeof(wchar_t), text.size(), file);
+    fclose(file);
+
+    if (info.Viewer)
+        info.Viewer(path, subject.c_str(), -1, -1, -1, -1, 0x200 | 0x8, 1200);
+    else
+        DeleteFileW(path);
+}
