@@ -303,8 +303,26 @@ void ShowMessageList(const PluginStartupInfo& info, ImapClient& client, const st
     }
 }
 
+static std::string WideToUtf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(bytes > 0 ? bytes : 0, '\0');
+    if (bytes > 0)
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), bytes, nullptr, nullptr);
+    return out;
+}
+
+static bool HasVisibleText(const std::string& text) {
+    return std::any_of(text.begin(), text.end(), [](unsigned char ch) { return ch > 32; });
+}
+
 void ShowMessageView(const PluginStartupInfo& info, const ImapMessageBody& msg) {
-    const std::string plain = msg.textBody.empty() ? htmlToPlainText(msg.htmlBody) : msg.textBody;
+    std::string plain = msg.textBody;
+    if (plain.find('<') != std::string::npos && plain.find('>') != std::string::npos)
+        plain = htmlToPlainText(plain);
+    if (!HasVisibleText(plain))
+        plain = htmlToPlainText(msg.htmlBody);
+
     const std::wstring subject = DecodeHeader(msg.subject.empty() ? "(без темы)" : msg.subject);
     std::wstring text;
     text += L"От: " + Person(msg.from) + L"\r\n";
@@ -313,6 +331,14 @@ void ShowMessageView(const PluginStartupInfo& info, const ImapMessageBody& msg) 
     text += L"Дата: " + utf8ToWide(msg.date) + L"\r\n";
     text += L"\r\n";
     text += utf8ToWide(plain);
+    text.erase(std::remove(text.begin(), text.end(), L'\0'), text.end());
+    std::wstring normalized;
+    normalized.reserve(text.size());
+    for (wchar_t ch : text) {
+        if (ch == L'\r') continue;
+        if (ch == L'\n') normalized += L"\r\n";
+        else normalized.push_back(ch);
+    }
 
     wchar_t directory[MAX_PATH]{};
     wchar_t path[MAX_PATH]{};
@@ -325,13 +351,14 @@ void ShowMessageView(const PluginStartupInfo& info, const ImapMessageBody& msg) 
         Note(info, L"Не удалось открыть письмо.");
         return;
     }
-    const unsigned char bom[] = { 0xFF, 0xFE };
+    const unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
+    const std::string utf8 = WideToUtf8(normalized);
     fwrite(bom, 1, sizeof(bom), file);
-    fwrite(text.data(), sizeof(wchar_t), text.size(), file);
+    fwrite(utf8.data(), 1, utf8.size(), file);
     fclose(file);
 
     if (info.Viewer)
-        info.Viewer(path, subject.c_str(), -1, -1, -1, -1, 0x200 | 0x8, 1200);
+        info.Viewer(path, subject.c_str(), -1, -1, -1, -1, 0x200 | 0x8, 65001);
     else
         DeleteFileW(path);
 }
