@@ -21,9 +21,7 @@ install-plugin.bat
 uninstall-plugin.bat
 install-all.bat
 uninstall-all.bat
-install-email-viewer.bat
-install-minimal-plugin.bat
-install-msvc-only.bat
+build.bat
 
 # Logs and dumps
 *.log
