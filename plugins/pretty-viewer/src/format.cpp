@@ -258,6 +258,7 @@ private:
             needComma = true;
         }
         ++i_;
+        if (!out_.cur.spans.empty()) out_.brk();
         out_.pad(depth * 2);
         out_.add(Token::Punct, std::wstring(1, close));
         return error_.empty();
@@ -694,24 +695,14 @@ private:
         }
         out_.add(Token::Punct, L">");
 
-        const size_t after = i_;
-        Skip();
-        if (Starts(L"</")) {
-            std::wstring inner = Trim(in_.substr(after, i_ - after));
+        size_t textEnd = i_;
+        while (textEnd < in_.size() && in_[textEnd] != L'<') ++textEnd;
+        const std::wstring inner = Trim(in_.substr(i_, textEnd - i_));
+        const bool directClose = textEnd + 1 < in_.size() && in_[textEnd] == L'<' && in_[textEnd + 1] == L'/';
+        if (directClose && inner.size() <= 64) {
+            i_ = textEnd;
             if (!CloseTag(name)) return false;
-            if (inner.empty() || (inner.find(L'<') == std::wstring::npos && inner.size() <= 64)) {
-                if (!inner.empty()) out_.add(Token::Text, inner);
-                out_.add(Token::Punct, L"</");
-                out_.add(Token::Tag, name);
-                out_.add(Token::Punct, L">");
-                out_.brk();
-                return true;
-            }
-            out_.brk();
-            out_.pad(depth * 2);
-            out_.add(Token::Text, inner);
-            out_.brk();
-            out_.pad(depth * 2);
+            if (!inner.empty()) out_.add(Token::Text, inner);
             out_.add(Token::Punct, L"</");
             out_.add(Token::Tag, name);
             out_.add(Token::Punct, L">");

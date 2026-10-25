@@ -20,7 +20,7 @@ jobs:
     - name: Setup CMake
       uses: jwlawson/actions-setup-cmake@v2
       with:
-        cmake-version: '3.31'
+        cmake-version: '4.2'
 
     - name: Setup OpenSSL
       run: |
@@ -28,48 +28,38 @@ jobs:
         echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
 
     - name: Configure
-      run: |
-        cmake -B build -S . -A x64
+      run: cmake -B build -S . -G "Visual Studio 18 2026" -A x64
 
     - name: Build
       run: |
         cmake --build build --config Release
 
     - name: Create installer package
+      shell: pwsh
       run: |
-        mkdir release-package
-        copy build\plugins\EmailViewer\Release\EmailViewer.dll release-package\
-        copy build\plugins\MarkdownViewer\Release\MarkdownViewer.dll release-package\
-        copy build\plugins\SshClient\Release\SshClient.dll release-package\
-
+        New-Item -ItemType Directory -Force -Path release-package | Out-Null
+        foreach ($name in @('EmailViewer', 'MarkdownViewer', 'PrettyViewer', 'SshClient')) {
+          Copy-Item "build\plugins\$name\Release\$name.dll" "release-package\$name.dll"
+        }
+        @'
         @echo off
-        (
-          echo @echo off
-          echo setlocal enabledelayedexpansion
-          echo.
-          echo set "INSTALL_DIR=C:\Program Files\Far Manager\Plugins"
-          echo.
-          echo net session ^>nul 2^>^&1
-          echo if %%errorlevel%% neq 0 ^(
-          echo     echo Requesting administrator privileges...
-          echo     powershell -Command "Start-Process '%%~f0' -Verb RunAs"
-          echo     exit /b
-          echo ^)
-          echo.
-          echo for %%%%p in ^(EmailViewer MarkdownViewer SshClient^) do ^(
-          echo     set "DEST_DIR=%%INSTALL_DIR%%\%%%%p"
-          echo     if not exist "%%DEST_DIR%%" mkdir "%%DEST_DIR%%"
-          echo     copy /y "%%~dp0%%%%p.dll" "%%DEST_DIR%%\" ^>nul
-          echo     if %%errorlevel%% equ 0 ^(
-          echo         echo [OK]   %%%%p
-          echo     ^) else ^(
-          echo         echo [FAIL] %%%%p
-          echo     ^)
-          echo ^)
-          echo.
-          echo echo Done.
-          echo pause
-        ) > release-package\install.bat
+        setlocal enabledelayedexpansion
+        set "INSTALL_DIR=C:\Program Files\Far Manager\Plugins"
+        net session >nul 2>&1
+        if %errorlevel% neq 0 (
+            echo Requesting administrator privileges...
+            powershell -Command "Start-Process '%~f0' -Verb RunAs"
+            exit /b
+        )
+        for %%p in (EmailViewer MarkdownViewer PrettyViewer SshClient) do (
+            set "DEST_DIR=%INSTALL_DIR%\%%p"
+            if not exist "!DEST_DIR!" mkdir "!DEST_DIR!"
+            copy /y "%~dp0%%p.dll" "!DEST_DIR!\" >nul
+            if errorlevel 1 (echo [FAIL] %%p) else (echo [OK] %%p)
+        )
+        echo Done.
+        pause
+        '@ | Set-Content -Encoding ascii release-package\install.bat
 
     - name: Create ZIP archive
       run: |

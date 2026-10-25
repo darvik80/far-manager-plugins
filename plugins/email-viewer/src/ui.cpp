@@ -161,17 +161,44 @@ static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wcha
 }
 
 static const PluginStartupInfo* g_settingsInfo = nullptr;
-static bool g_swallowEnter = false;
+static ULONGLONG g_ignoreEnterUntil = 0;
+
+static bool IsEnterDown(const void* param2) {
+    if (!param2) return false;
+    const auto* rec = static_cast<const INPUT_RECORD*>(param2);
+    return rec->EventType == KEY_EVENT && rec->Event.KeyEvent.bKeyDown &&
+           rec->Event.KeyEvent.wVirtualKeyCode == VK_RETURN;
+}
+
+static bool HostFilled(HANDLE dlg) {
+    if (!g_settingsInfo || !g_settingsInfo->SendDlgMessage) return true;
+    const auto* host = reinterpret_cast<const wchar_t*>(
+        g_settingsInfo->SendDlgMessage(dlg, DM_GETCONSTTEXTPTR, 4, nullptr));
+    if (!host) return false;
+    while (*host == L' ' || *host == L'\t') ++host;
+    return *host != L'\0';
+}
 
 static intptr_t WINAPI SettingsDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
-    if (g_swallowEnter && msg == DN_INPUT && param2) {
-        const auto* rec = static_cast<const INPUT_RECORD*>(param2);
-        if (rec->EventType == KEY_EVENT && rec->Event.KeyEvent.wVirtualKeyCode == VK_RETURN) {
-            const bool down = rec->Event.KeyEvent.bKeyDown != FALSE;
-            const bool held = (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0;
-            if (down && held) return 0;
-            g_swallowEnter = false;
+    if (msg == DN_INITDIALOG) {
+        g_ignoreEnterUntil = GetTickCount64() + 500;
+        if (g_settingsInfo && g_settingsInfo->SendDlgMessage)
+            g_settingsInfo->SendDlgMessage(dlg, DM_SETINPUTNOTIFY, 1, nullptr);
+    }
+    const bool opening = GetTickCount64() < g_ignoreEnterUntil;
+    if (opening && (msg == DN_INPUT || msg == DN_CONTROLINPUT) && IsEnterDown(param2))
+        return msg == DN_INPUT ? 0 : 1;
+    if (msg == DN_CLOSE && param1 == 12 && (opening || !HostFilled(dlg))) {
+        if (!opening && g_settingsInfo && g_settingsInfo->SendDlgMessage) {
+            const wchar_t* title = L" Укажите сервер ";
+            FarDialogItemData data{};
+            data.StructSize = sizeof(data);
+            data.PtrLength = static_cast<intptr_t>(wcslen(title));
+            data.PtrData = const_cast<wchar_t*>(title);
+            g_settingsInfo->SendDlgMessage(dlg, DM_SETTEXT, 0, &data);
+            g_settingsInfo->SendDlgMessage(dlg, DM_SETFOCUS, 4, nullptr);
         }
+        return 0;
     }
     if (g_settingsInfo && g_settingsInfo->DefDlgProc)
         return g_settingsInfo->DefDlgProc(dlg, msg, param1, param2);
@@ -213,6 +240,7 @@ bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
         items[2 + i * 2].X2 = 56;
         items[2 + i * 2].Data = buffers[i];
         items[2 + i * 2].MaxLength = lengths[i];
+        if (i == 0) items[2 + i * 2].Flags = DIF_FOCUS;
     }
 
     items[11].Type = DI_CHECKBOX;
@@ -234,7 +262,7 @@ bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
     items[13].Data = L"Отмена";
 
     g_settingsInfo = &info;
-    g_swallowEnter = false;
+    g_ignoreEnterUntil = GetTickCount64() + 500;
     HANDLE dialog = info.DialogInit(
         MainGuid, SettingsDialogGuid, -1, -1, 60, 17, nullptr, items, 14, 0, 0, SettingsDlgProc, 0);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) {
@@ -242,9 +270,7 @@ bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
         return false;
     }
 
-    g_swallowEnter = (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0;
     const intptr_t result = info.DialogRun(dialog);
-    g_swallowEnter = false;
     g_settingsInfo = nullptr;
     const bool saved = result == 12;
     if (saved && info.SendDlgMessage) {

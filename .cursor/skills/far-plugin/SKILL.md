@@ -24,7 +24,7 @@ Install only through `install-plugin.bat <Name>` or `install-all.bat`. They elev
 
 A dialog proc that returns 0 for `DN_DRAWDIALOG` never paints and hangs the UI. Unhandled messages go to `Info.DefDlgProc`. A null proc is safe. Read edits with `DM_GETCONSTTEXTPTR` (63), checks with `DM_GETCHECK` (25, `BSTATE_CHECKED` is 1). `DialogInit(-1,-1,w,h)` centers. Password fields are `DI_PSWEDIT`.
 
-Enter that closed a menu is still down when the next dialog opens and activates `DIF_DEFAULTBUTTON`. Swallow `VK_RETURN` in `DN_INPUT` while `GetAsyncKeyState(VK_RETURN)` is down, then pass every other message, including `DN_DRAWDIALOG`, to `DefDlgProc`.
+Enter that closed a menu is queued and processed by the next dialog after the key is already up, so `GetAsyncKeyState(VK_RETURN)` does not see it. `DIF_DEFAULTBUTTON` then closes the dialog. `DN_INPUT` arrives only after `DM_SETINPUTNOTIFY` (49); return 0 to consume it. Return nonzero from `DN_CONTROLINPUT` to consume that message. Return 0 from `DN_CLOSE` to keep the dialog open. Ignore that opening Enter for a few hundred milliseconds, and refuse Save while a required field is empty. A later Enter must reach `DefDlgProc`. `DN_DRAWDIALOG` always goes to `DefDlgProc`.
 
 ## Menus and keys
 
