@@ -158,29 +158,31 @@ static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wcha
     return info.Menu(MainGuid, guid, -1, -1, 0, 0x2, title, bottom, nullptr, nullptr, nullptr, items.data(), items.size());
 }
 
-bool ShowSettingsDialog(const PluginStartupInfo& info, ImapSettings& settings) {
+bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
+    wchar_t name[256]{};
     wchar_t host[256]{};
     wchar_t port[16]{};
     wchar_t login[256]{};
     wchar_t password[256]{};
-    wcsncpy_s(host, settings.host.c_str(), _TRUNCATE);
-    wcsncpy_s(port, std::to_wstring(settings.port ? settings.port : 993).c_str(), _TRUNCATE);
-    wcsncpy_s(login, settings.login.c_str(), _TRUNCATE);
-    wcsncpy_s(password, settings.password.c_str(), _TRUNCATE);
+    wcsncpy_s(name, account.name.c_str(), _TRUNCATE);
+    wcsncpy_s(host, account.settings.host.c_str(), _TRUNCATE);
+    wcsncpy_s(port, std::to_wstring(account.settings.port ? account.settings.port : 993).c_str(), _TRUNCATE);
+    wcsncpy_s(login, account.settings.login.c_str(), _TRUNCATE);
+    wcsncpy_s(password, account.settings.password.c_str(), _TRUNCATE);
 
-    FarDialogItem items[12]{};
+    FarDialogItem items[14]{};
     items[0].Type = DI_DOUBLEBOX;
     items[0].X1 = 0;
     items[0].Y1 = 0;
     items[0].X2 = 59;
-    items[0].Y2 = 14;
+    items[0].Y2 = 16;
     items[0].Data = L" Почта ";
 
-    const wchar_t* labels[] = { L"Сервер:", L"Порт:", L"Логин:", L"Пароль:" };
-    wchar_t* buffers[] = { host, port, login, password };
-    const int kinds[] = { DI_EDIT, DI_EDIT, DI_EDIT, DI_PSWEDIT };
-    const intptr_t lengths[] = { 255, 15, 255, 255 };
-    for (int i = 0; i < 4; ++i) {
+    const wchar_t* labels[] = { L"Имя:", L"Сервер:", L"Порт:", L"Логин:", L"Пароль:" };
+    wchar_t* buffers[] = { name, host, port, login, password };
+    const int kinds[] = { DI_EDIT, DI_EDIT, DI_EDIT, DI_EDIT, DI_PSWEDIT };
+    const intptr_t lengths[] = { 255, 255, 15, 255, 255 };
+    for (int i = 0; i < 5; ++i) {
         items[1 + i * 2].Type = DI_TEXT;
         items[1 + i * 2].X1 = 2;
         items[1 + i * 2].Y1 = 2 + i * 2;
@@ -193,49 +195,72 @@ bool ShowSettingsDialog(const PluginStartupInfo& info, ImapSettings& settings) {
         items[2 + i * 2].MaxLength = lengths[i];
     }
 
-    items[9].Type = DI_CHECKBOX;
-    items[9].X1 = 2;
-    items[9].Y1 = 10;
-    items[9].Param.Selected = settings.useSSL ? 1 : 0;
-    items[9].Data = L"SSL";
-
-    items[10].Type = DI_BUTTON;
-    items[10].X1 = 16;
-    items[10].Y1 = 12;
-    items[10].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
-    items[10].Data = L"Сохранить";
-
-    items[11].Type = DI_BUTTON;
-    items[11].X1 = 28;
+    items[11].Type = DI_CHECKBOX;
+    items[11].X1 = 2;
     items[11].Y1 = 12;
-    items[11].Flags = DIF_CENTERGROUP;
-    items[11].Data = L"Отмена";
+    items[11].Param.Selected = account.settings.useSSL ? 1 : 0;
+    items[11].Data = L"SSL";
+
+    items[12].Type = DI_BUTTON;
+    items[12].X1 = 16;
+    items[12].Y1 = 14;
+    items[12].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
+    items[12].Data = L"Сохранить";
+
+    items[13].Type = DI_BUTTON;
+    items[13].X1 = 28;
+    items[13].Y1 = 14;
+    items[13].Flags = DIF_CENTERGROUP;
+    items[13].Data = L"Отмена";
 
     HANDLE dialog = info.DialogInit(
-        MainGuid, SettingsDialogGuid, -1, -1, 60, 15, nullptr, items, 12, 0, 0, nullptr, 0);
+        MainGuid, SettingsDialogGuid, -1, -1, 60, 17, nullptr, items, 14, 0, 0, nullptr, 0);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) return false;
 
     const intptr_t result = info.DialogRun(dialog);
-    const bool saved = result == 10;
+    const bool saved = result == 12;
     if (saved && info.SendDlgMessage) {
         auto text = [&](int id) -> std::wstring {
             const wchar_t* value = reinterpret_cast<const wchar_t*>(
                 info.SendDlgMessage(dialog, DM_GETCONSTTEXTPTR, id, nullptr));
             return value ? value : L"";
         };
-        settings.host = text(2);
-        settings.login = text(6);
-        settings.password = text(8);
-        settings.useSSL = info.SendDlgMessage(dialog, DM_GETCHECK, 9, nullptr) == 1;
+        account.name = text(2);
+        account.settings.host = text(4);
+        account.settings.login = text(8);
+        account.settings.password = text(10);
+        account.settings.useSSL = info.SendDlgMessage(dialog, DM_GETCHECK, 11, nullptr) == 1;
         try {
-            settings.port = std::stoi(text(4));
+            account.settings.port = std::stoi(text(6));
         } catch (...) {
-            settings.port = settings.useSSL ? 993 : 143;
+            account.settings.port = account.settings.useSSL ? 993 : 143;
         }
-        if (settings.port <= 0) settings.port = settings.useSSL ? 993 : 143;
+        if (account.settings.port <= 0) account.settings.port = account.settings.useSSL ? 993 : 143;
+        if (account.name.empty())
+            account.name = account.settings.login.empty() ? account.settings.host : account.settings.login;
     }
     info.DialogFree(dialog);
-    return saved && !settings.host.empty();
+    return saved && !account.settings.host.empty();
+}
+
+void ConfigureAccounts(const PluginStartupInfo& info, std::vector<ImapAccount>& accounts) {
+    for (;;) {
+        std::vector<std::wstring> lines;
+        lines.reserve(accounts.size() + 1);
+        for (const auto& account : accounts)
+            lines.push_back(account.name.empty() ? account.settings.host : account.name);
+        lines.push_back(L"Добавить учётную запись");
+        const intptr_t pick = Pick(info, FolderListDialogGuid, L"Учётные записи", L"Enter — изменить или добавить, Esc — выход", lines);
+        if (pick < 0) return;
+        if (pick == static_cast<intptr_t>(accounts.size())) {
+            ImapAccount account;
+            account.settings.port = 993;
+            account.settings.useSSL = true;
+            if (ShowSettingsDialog(info, account)) accounts.push_back(std::move(account));
+            continue;
+        }
+        ShowSettingsDialog(info, accounts[static_cast<size_t>(pick)]);
+    }
 }
 
 void ShowAccountList(const PluginStartupInfo& info, const std::vector<ImapAccount>& accounts, int& selectedIndex) {

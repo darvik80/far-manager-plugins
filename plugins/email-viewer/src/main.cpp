@@ -156,7 +156,7 @@ HANDLE WINAPI OpenW(const OpenInfo* Info) {
         if (g_accounts.empty()) {
             ImapAccount newAcc;
             newAcc.name = L"Default";
-            if (!ShowSettingsDialog(g_info, newAcc.settings)) return nullptr;
+            if (!ShowSettingsDialog(g_info, newAcc)) return nullptr;
             g_accounts.push_back(newAcc);
             SaveSettings();
         }
@@ -177,7 +177,7 @@ HANDLE WINAPI OpenW(const OpenInfo* Info) {
             std::wstring msg = L"Не удалось подключиться:\n" + werr;
             const wchar_t* items[] = { L"Почта", msg.c_str(), L"Изменить настройки соединения?" };
             if (g_info.Message(MainGuid, ErrorGuid, FMSG_MB_YESNO | FMSG_ERRORTYPE, nullptr, items, 3, 2) == 0) {
-                if (ShowSettingsDialog(g_info, g_accounts[g_selectedAccount].settings))
+                if (ShowSettingsDialog(g_info, g_accounts[g_selectedAccount]))
                     SaveSettings();
             }
             return nullptr;
@@ -195,14 +195,7 @@ HANDLE WINAPI OpenW(const OpenInfo* Info) {
 }
 
 intptr_t WINAPI ConfigureW(const ConfigureInfo*) {
-    if (g_accounts.empty()) {
-        ImapAccount newAcc;
-        newAcc.name = L"Default";
-        if (!ShowSettingsDialog(g_info, newAcc.settings)) return 0;
-        g_accounts.push_back(newAcc);
-    } else if (!ShowSettingsDialog(g_info, g_accounts[0].settings)) {
-        return 0;
-    }
+    ConfigureAccounts(g_info, g_accounts);
     SaveSettings();
     return 1;
 }

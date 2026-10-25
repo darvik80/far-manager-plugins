@@ -238,9 +238,18 @@ static intptr_t OpenMarkdownOnF3(const INPUT_RECORD& rec) {
     if (mods)
         return 0;
 
+    struct WindowType {
+        size_t StructSize;
+        int Type;
+    } window{};
+    window.StructSize = sizeof(window);
     constexpr int kGetWindowType = 28;
-    constexpr intptr_t kPanels = 1;
-    if (!g_info.AdvControl || g_info.AdvControl(MainGuid, kGetWindowType, 0, nullptr) != kPanels)
+    constexpr int kPanels = 1;
+    const intptr_t windowResult = g_info.AdvControl
+        ? g_info.AdvControl(MainGuid, kGetWindowType, 0, &window)
+        : 0;
+    const bool panels = window.Type == kPanels || (window.Type == 0 && windowResult == kPanels);
+    if (!panels)
         return 0;
 
     const std::wstring path = GetCurrentFilePath();
