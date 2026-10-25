@@ -16,17 +16,13 @@ cmake-build-debug/
 *.exe
 *.pdb
 
-# Install scripts (local only)
-install-plugin.bat
-uninstall-plugin.bat
-install-all.bat
-uninstall-all.bat
-build.bat
-
 # Logs and dumps
 *.log
 *.dump
+*.dmp
+*.7z
 dump_log.txt
 stacks_*.txt
 stack_main.txt
 rva_resolve.txt
+take_dump.ps1

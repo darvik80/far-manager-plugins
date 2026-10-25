@@ -372,9 +372,6 @@ LineStyle MarkdownParser::DetectLineStyle(const std::wstring& line) {
     if (trimmed.find(L'|') != std::wstring::npos && trimmed[0] == L'|')
         return LineStyle::Table;
 
-    if (trimmed.size() >= 2 && trimmed[0] == L'!' && trimmed[1] == L'[')
-        return LineStyle::Image;
-
     return LineStyle::Normal;
 }
 
@@ -437,6 +434,34 @@ std::wstring MarkdownParser::StripMarkdownSyntax(const std::wstring& line, LineS
     }
 }
 
+static bool StartsAt(const std::wstring& text, size_t i, const wchar_t* prefix) {
+    for (size_t k = 0; prefix[k] != 0; ++k) {
+        if (i + k >= text.size() || text[i + k] != prefix[k]) return false;
+    }
+    return true;
+}
+
+static std::wstring CleanUrl(std::wstring url) {
+    while (!url.empty() && (url.front() == L' ' || url.front() == L'<')) url.erase(url.begin());
+    while (!url.empty() && (url.back() == L' ' || url.back() == L'>')) url.pop_back();
+    const size_t space = url.find(L' ');
+    if (space != std::wstring::npos) url.resize(space);
+    return url;
+}
+
+static size_t ScanBareUrl(const std::wstring& text, size_t i) {
+    size_t j = i;
+    while (j < text.size() && !iswspace(text[j]) && text[j] != L'<' && text[j] != L'>') ++j;
+    while (j > i) {
+        const wchar_t ch = text[j - 1];
+        if (ch == L'.' || ch == L',' || ch == L';' || ch == L':' || ch == L'!' || ch == L'?' || ch == L')' || ch == L']')
+            --j;
+        else
+            break;
+    }
+    return j;
+}
+
 std::vector<StyledSegment> MarkdownParser::ParseInlineFormatting(const std::wstring& text, LineStyle lineStyle) {
     std::vector<StyledSegment> segments;
 
@@ -493,23 +518,89 @@ std::vector<StyledSegment> MarkdownParser::ParseInlineFormatting(const std::wstr
                 ++i;
             }
         }
-        else if (text[i] == L'*' || text[i] == L'_') {
-            if (!currentText.empty()) {
-                segments.push_back(StyledSegment(currentText, headerStyle));
-                currentText.clear();
+        else if (text[i] == L'[' || (text[i] == L'!' && i + 1 < text.size() && text[i + 1] == L'[')) {
+            const bool isImage = text[i] == L'!';
+            const size_t labelStart = isImage ? i + 2 : i + 1;
+            const size_t bracketEnd = text.find(L']', labelStart);
+            size_t dest = bracketEnd == std::wstring::npos ? std::wstring::npos : bracketEnd + 1;
+            while (dest != std::wstring::npos && dest < text.size() && (text[dest] == L' ' || text[dest] == L'\t')) ++dest;
+            if (bracketEnd != std::wstring::npos && dest < text.size() && text[dest] == L'(') {
+                size_t paren = dest + 1;
+                int depth = 1;
+                bool quote = false;
+                for (; paren < text.size() && depth > 0; ++paren) {
+                    if (text[paren] == L'"') quote = !quote;
+                    else if (!quote && text[paren] == L'(') ++depth;
+                    else if (!quote && text[paren] == L')') --depth;
+                }
+                if (depth == 0) {
+                    if (!currentText.empty()) {
+                        segments.push_back(StyledSegment(currentText, headerStyle));
+                        currentText.clear();
+                    }
+                    const std::wstring label = text.substr(labelStart, bracketEnd - labelStart);
+                    const std::wstring url = CleanUrl(text.substr(dest + 1, paren - dest - 2));
+                    if (isImage) {
+                        const std::wstring name = label.empty() ? L"image" : label;
+                        segments.push_back(StyledSegment(L"[img] " + name, SegmentStyle::Image, url));
+                        if (!url.empty())
+                            segments.push_back(StyledSegment(L"  " + url, SegmentStyle::Link, url));
+                    } else {
+                        segments.push_back(StyledSegment(label.empty() ? url : label, SegmentStyle::Link, url));
+                    }
+                    i = paren;
+                    continue;
+                }
             }
-
-            wchar_t marker = text[i];
-            size_t start = i + 1;
-            size_t end = text.find(marker, start);
-
-            if (end != std::wstring::npos && end > start) {
-                std::wstring italicText = text.substr(start, end - start);
-                segments.push_back(StyledSegment(italicText, SegmentStyle::Italic));
+            currentText += text[i];
+            ++i;
+        }
+        else if (text[i] == L'<' && (StartsAt(text, i + 1, L"https://") || StartsAt(text, i + 1, L"http://"))) {
+            const size_t end = text.find(L'>', i + 1);
+            if (end != std::wstring::npos) {
+                if (!currentText.empty()) {
+                    segments.push_back(StyledSegment(currentText, headerStyle));
+                    currentText.clear();
+                }
+                const std::wstring url = text.substr(i + 1, end - i - 1);
+                segments.push_back(StyledSegment(url, SegmentStyle::Link, url));
                 i = end + 1;
-            } else {
+                continue;
+            }
+            currentText += text[i];
+            ++i;
+        }
+        else if (StartsAt(text, i, L"https://") || StartsAt(text, i, L"http://")) {
+            const size_t end = ScanBareUrl(text, i);
+            if (end > i + 8) {
+                if (!currentText.empty()) {
+                    segments.push_back(StyledSegment(currentText, headerStyle));
+                    currentText.clear();
+                }
+                const std::wstring url = text.substr(i, end - i);
+                segments.push_back(StyledSegment(url, SegmentStyle::Link, url));
+                i = end;
+                continue;
+            }
+            currentText += text[i];
+            ++i;
+        }
+        else if (text[i] == L'*' || text[i] == L'_') {
+            const wchar_t marker = text[i];
+            const bool word = marker == L'_' && i > 0 && iswalnum(text[i - 1]);
+            const size_t end = word ? std::wstring::npos : text.find(marker, i + 1);
+            const bool closed = end != std::wstring::npos && end > i + 1 &&
+                (marker != L'_' || end + 1 >= text.size() || !iswalnum(text[end + 1]));
+            if (!closed) {
                 currentText += text[i];
                 ++i;
+            } else {
+                if (!currentText.empty()) {
+                    segments.push_back(StyledSegment(currentText, headerStyle));
+                    currentText.clear();
+                }
+                segments.push_back(StyledSegment(text.substr(i + 1, end - i - 1), SegmentStyle::Italic));
+                i = end + 1;
             }
         }
         else if (text[i] == L'`') {
@@ -525,35 +616,6 @@ std::vector<StyledSegment> MarkdownParser::ParseInlineFormatting(const std::wstr
                 std::wstring codeText = text.substr(start, end - start);
                 segments.push_back(StyledSegment(codeText, SegmentStyle::Code));
                 i = end + 1;
-            } else {
-                currentText += text[i];
-                ++i;
-            }
-        }
-        else if (text[i] == L'[' || (text[i] == L'!' && i + 1 < text.size() && text[i + 1] == L'[')) {
-            if (!currentText.empty()) {
-                segments.push_back(StyledSegment(currentText, headerStyle));
-                currentText.clear();
-            }
-
-            bool isImage = (text[i] == L'!');
-            size_t start = isImage ? i + 2 : i + 1;
-            size_t bracketEnd = text.find(L']', start);
-
-            if (bracketEnd != std::wstring::npos && bracketEnd + 1 < text.size() && text[bracketEnd + 1] == L'(') {
-                size_t parenEnd = text.find(L')', bracketEnd + 2);
-                if (parenEnd != std::wstring::npos) {
-                    std::wstring linkText = text.substr(start, bracketEnd - start);
-                    if (isImage) {
-                        segments.push_back(StyledSegment(L"[Image: " + linkText + L"]", SegmentStyle::Image));
-                    } else {
-                        segments.push_back(StyledSegment(linkText, SegmentStyle::Link));
-                    }
-                    i = parenEnd + 1;
-                } else {
-                    currentText += text[i];
-                    ++i;
-                }
             } else {
                 currentText += text[i];
                 ++i;

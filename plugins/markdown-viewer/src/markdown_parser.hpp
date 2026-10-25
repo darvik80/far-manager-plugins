@@ -50,9 +50,11 @@ enum class SegmentStyle : uint8_t {
 struct StyledSegment {
     std::wstring text;
     SegmentStyle style;
+    std::wstring hint;
 
     StyledSegment() : style(SegmentStyle::Normal) {}
-    StyledSegment(const std::wstring& t, SegmentStyle s) : text(t), style(s) {}
+    StyledSegment(const std::wstring& t, SegmentStyle s, const std::wstring& h = L"")
+        : text(t), style(s), hint(h) {}
 };
 
 struct StyledLine {
