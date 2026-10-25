@@ -151,11 +151,31 @@ static void Note(const PluginStartupInfo& info, const wchar_t* text) {
     if (info.Message) info.Message(MainGuid, ErrorGuid, FMSG_MB_OK | FMSG_LEFTALIGN, nullptr, items, 2, 1);
 }
 
-static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wchar_t* title, const wchar_t* bottom, const std::vector<std::wstring>& lines) {
+static intptr_t Pick(const PluginStartupInfo& info, const GUID& guid, const wchar_t* title, const wchar_t* bottom, const std::vector<std::wstring>& lines, intptr_t selected = 0) {
     if (!info.Menu || lines.empty()) return -1;
     std::vector<FarMenuItem> items(lines.size());
     for (size_t i = 0; i < lines.size(); ++i) items[i].Text = lines[i].c_str();
+    if (selected >= 0 && static_cast<size_t>(selected) < items.size())
+        items[static_cast<size_t>(selected)].Flags = 0x10000; // MIF_SELECTED
     return info.Menu(MainGuid, guid, -1, -1, 0, 0x2, title, bottom, nullptr, nullptr, nullptr, items.data(), items.size());
+}
+
+static const PluginStartupInfo* g_settingsInfo = nullptr;
+static bool g_swallowEnter = false;
+
+static intptr_t WINAPI SettingsDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
+    if (g_swallowEnter && msg == DN_INPUT && param2) {
+        const auto* rec = static_cast<const INPUT_RECORD*>(param2);
+        if (rec->EventType == KEY_EVENT && rec->Event.KeyEvent.wVirtualKeyCode == VK_RETURN) {
+            const bool down = rec->Event.KeyEvent.bKeyDown != FALSE;
+            const bool held = (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0;
+            if (down && held) return 0;
+            g_swallowEnter = false;
+        }
+    }
+    if (g_settingsInfo && g_settingsInfo->DefDlgProc)
+        return g_settingsInfo->DefDlgProc(dlg, msg, param1, param2);
+    return 1;
 }
 
 bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
@@ -213,11 +233,19 @@ bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
     items[13].Flags = DIF_CENTERGROUP;
     items[13].Data = L"Отмена";
 
+    g_settingsInfo = &info;
+    g_swallowEnter = false;
     HANDLE dialog = info.DialogInit(
-        MainGuid, SettingsDialogGuid, -1, -1, 60, 17, nullptr, items, 14, 0, 0, nullptr, 0);
-    if (!dialog || dialog == INVALID_HANDLE_VALUE) return false;
+        MainGuid, SettingsDialogGuid, -1, -1, 60, 17, nullptr, items, 14, 0, 0, SettingsDlgProc, 0);
+    if (!dialog || dialog == INVALID_HANDLE_VALUE) {
+        g_settingsInfo = nullptr;
+        return false;
+    }
 
+    g_swallowEnter = (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0;
     const intptr_t result = info.DialogRun(dialog);
+    g_swallowEnter = false;
+    g_settingsInfo = nullptr;
     const bool saved = result == 12;
     if (saved && info.SendDlgMessage) {
         auto text = [&](int id) -> std::wstring {
@@ -244,14 +272,18 @@ bool ShowSettingsDialog(const PluginStartupInfo& info, ImapAccount& account) {
 }
 
 void ConfigureAccounts(const PluginStartupInfo& info, std::vector<ImapAccount>& accounts) {
+    intptr_t selected = static_cast<intptr_t>(accounts.size());
     for (;;) {
         std::vector<std::wstring> lines;
         lines.reserve(accounts.size() + 1);
         for (const auto& account : accounts)
             lines.push_back(account.name.empty() ? account.settings.host : account.name);
         lines.push_back(L"Добавить учётную запись");
-        const intptr_t pick = Pick(info, FolderListDialogGuid, L"Учётные записи", L"Enter — изменить или добавить, Esc — выход", lines);
+        if (selected < 0 || static_cast<size_t>(selected) >= lines.size())
+            selected = static_cast<intptr_t>(lines.size() - 1);
+        const intptr_t pick = Pick(info, FolderListDialogGuid, L"Учётные записи", L"Enter — изменить или добавить, Esc — выход", lines, selected);
         if (pick < 0) return;
+        selected = pick;
         if (pick == static_cast<intptr_t>(accounts.size())) {
             ImapAccount account;
             account.settings.port = 993;
