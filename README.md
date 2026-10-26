@@ -82,6 +82,28 @@ IMAP-клиент для просмотра электронной почты п
 
 ---
 
+### 🌐 HTML Viewer (Lua)
+
+Просмотр HTML-файлов через Lua-скрипт (без компиляции).
+
+**Возможности:**
+- Открытие `.html` и `.htm` по F3
+- Конвертация HTML в plain text
+- Поддержка UTF-8 и UTF-16
+- Декодирование HTML-entities
+
+**Установка:**
+```bat
+install-lua-plugin.bat html-viewer
+```
+
+**Использование:**
+- `F3` на `.html` или `.htm` файле
+- `Ctrl+Shift+H` — конвертировать HTML из буфера обмена в текст
+- `F11` → HTML Viewer
+
+---
+
 ## 🚀 Быстрый старт
 
 ### Установка готовых сборок
@@ -120,13 +142,16 @@ far-manager-plugins/
 │   ├── email-viewer/      # IMAP клиент
 │   ├── markdown-viewer/   # Markdown просмотрщик
 │   ├── pretty-viewer/     # JSON, YAML, XML
-│   └── ssh-client/        # SFTP панель
+│   ── ssh-client/        # SFTP панель
+── lua-plugins/
+│   └── html-viewer/       # HTML просмотрщик (Lua)
 ├── sdk/                   # FAR Manager API headers
 ├── .github/workflows/     # CI/CD (GitHub Actions)
 ├── CMakeLists.txt         # Основной CMake файл
-├── build.bat              # Сборка всех плагинов
-├── install-all.bat        # Установка всех плагинов
-└── uninstall-all.bat      # Удаление всех плагинов
+├── build.bat              # Сборка всех C++ плагинов
+├── install-all.bat        # Установка всех C++ плагинов
+├── uninstall-all.bat      # Удаление всех C++ плагинов
+└── install-lua-plugin.bat # Установка Lua плагинов
 ```
 
 ---
