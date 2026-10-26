@@ -13,7 +13,7 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-for %%p in (EmailViewer MarkdownViewer SshClient) do (
+for %%p in (EmailViewer HtmlViewer MarkdownViewer PrettyViewer SecretVault SshClient) do (
     set "DEST_DIR=%INSTALL_DIR%\%%p"
 
     if exist "!DEST_DIR!" (

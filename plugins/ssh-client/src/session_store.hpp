@@ -10,9 +10,12 @@ struct StoredServer {
     std::wstring port = L"22";
     std::wstring user;
     std::wstring keyFile;
+    std::wstring vaultKey;
+    std::wstring vaultPassword;
     std::wstring proxy;
     std::wstring password;
     bool fromConfig = false;
+    bool fromTeleport = false;
     std::wstring keyLabel;
     std::vector<std::wstring> identityFiles;
 };

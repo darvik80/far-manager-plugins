@@ -77,30 +77,98 @@ IMAP-клиент для просмотра электронной почты п
 - `Alt+F1` / `Alt+F2` → SSH. Если цифра ещё не назначена, плагин ставит `6`
 - `F11` → SSH
 - Командная строка FAR: `ssh:`
-- На списке серверов: `F4` — изменить, `F7` или `Shift+F4` — новый, `F8` — удалить
+- На списке серверов: `F3` — карточка хоста, `F4` — изменить, `F7` или `Shift+F4` — новый, `F8` — удалить. Хосты из `tsh` и `~/.ssh/config` тоже открываются: у Teleport имя/адрес/порт только смотреть, логин и ключ можно сохранить поверх
+- `F2` или `Shift+Enter` — обычный SSH-терминал в отдельном окне (`tsh ssh` для Teleport, `ssh.exe` для остальных). Enter по-прежнему открывает SFTP
+- Если установлен `tsh`: `F6` — `tsh login --mfa-mode=otp` в отдельном окне (пароль и OTP, либо браузер/SSO). Ноды из `tsh ls` появляются в списке, вход идёт через `tsh proxy ssh`
 - В каталоге: `F5` — копировать, `F6` — переименовать, `F7` — папка, `F8` — удалить
+- Поля `Ключ vault` / `Пароль vault` — имена записей Secret Vault. Открытый пароль из старого `sessions.ini` при наличии хранилища переносится туда
 
 ---
 
-### 🌐 HTML Viewer (Lua)
+### Secret Vault
 
-Просмотр HTML-файлов через Lua-скрипт (без компиляции).
+Зашифрованное хранилище паролей и OpenSSH-ключей.
 
 **Возможности:**
-- Открытие `.html` и `.htm` по F3
-- Конвертация HTML в plain text
-- Поддержка UTF-8 и UTF-16
-- Декодирование HTML-entities
+- Файл `%APPDATA%\Far Manager\SecretVault\vault.bin` защищён Windows DPAPI текущей учётки
+- Каталоги `Пароли` и `Ключи`
+- Создание ключей ed25519 и RSA 3072 через `ssh-keygen`, импорт OpenSSH-файлов
+- Копирование секрета в буфер (`F5` / `Ctrl+C`), очистка через 30 секунд
+- Экспорт/импорт файла с паролем (AES-256-GCM)
+- SSH берёт пароль и ключ по имени записи
+
+**Использование:**
+- `Alt+F1` / `Alt+F2` → Secret Vault. Если цифра ещё не назначена, плагин ставит `7`
+- `F11` → Secret Vault
+- На корне и в каталоге: `F7` или `Shift+F4` — новая запись. На корне F7 создаёт пароль или ключ в зависимости от строки под курсором
+- В каталоге: `F4` — изменить, `F5` — секрет в буфер, `F3` — логин или публичный ключ, `F8` — удалить
+- Ключи с диска: встань на `id_ed25519` / `id_rsa` в другой панели и `F5` в `Ключи` (`.pub` не нужен)
+- `Alt+F5` — экспорт, `Alt+F6` — импорт
+
+---
+
+### 🌐 HTML Viewer
+
+Просмотр HTML-файлов в нативном просмотрщике с подсветкой: заголовки, списки, таблицы,
+цитаты, код и ссылки. Темы те же 16 палитр, что у Markdown Viewer (`F8` / `Shift+F8`).
+Разбор HTML и CSS написан на Lua и работает внутри обёртки LuaFAR (`luaplug`), а
+отрисовка цветных строк — в общем нативном хосте: LuaFAR не умеет заполнять
+`DI_USERCONTROL` `VBuf`. Плагин виден в `F11`, имеет собственный GUID и префикс
+командной строки.
+
+**Возможности:**
+- `F3` на `.html`, `.htm` и `.xhtml` — просмотр с темами и стилями
+- 16 тем, `F8` / `Shift+F8` — следующая / предыдущая (общая палитра с Markdown Viewer)
+- `F7` / `Shift+F7` — поиск, `Ctrl+↑` / `Ctrl+↓` — переход по заголовкам
+- Базовые стили: заголовки, `b/strong`, `i/em`, `u/ins`, `s/del`, inline `code`, `pre`,
+  ссылки, изображения (`alt`/`src`), списки `ul/ol`, цитаты, `hr`, таблицы
+- Inline CSS и простые правила `<style>`: тег, `.class`, `#id`;
+  `color`, `background-color`, `font-weight`, `font-style`, `text-decoration`, `display:none`
+- CSS-цвета применяются только если читаемы на текущей теме; заголовки всегда
+  сохраняют цвет темы
+- Поддержка UTF-8, UTF-16 LE/BE (BOM) и ANSI, декодирование HTML-entities
+- Конвертер — обычный Lua-скрипт (`plugins/html-viewer/lua/html_convert.lua`)
+
+**Требования:**
+- FAR Manager 3.0 со штатными `lua51.dll` и `luafar3.dll` в каталоге FAR (входят в поставку)
 
 **Установка:**
 ```bat
-install-lua-plugin.bat html-viewer
+install-plugin.bat HtmlViewer
 ```
 
 **Использование:**
-- `F3` на `.html` или `.htm` файле
-- `Ctrl+Shift+H` — конвертировать HTML из буфера обмена в текст
+- `F3` на HTML-файле в обычной панели
 - `F11` → HTML Viewer
+- Командная строка FAR: `htmlview: <файл>`
+- В просмотрщике: `F8` — тема, `F7` — поиск, `F3` или `Esc` — закрыть
+
+---
+
+## 🧩 Новый Lua-плагин
+
+Lua-плагины используют общий host `third_party/luafar` и функцию `add_luafar_plugin()` из `cmake/LuaFarPlugin.cmake`; отдельный C++ для каждого плагина не нужен.
+
+1. Создайте `plugins/<Name>/`:
+   - `CMakeLists.txt`:
+     ```cmake
+     add_luafar_plugin(<Name>
+         LUA_FILES lua/plugin.lua
+     )
+     ```
+   - `_globalinfo.lua` — уникальный GUID, `Title`, `Version`, `MinFarVersion`.
+   - `lua/plugin.lua` — обработчики `export.GetPluginInfo`, `export.Open`, `export.ProcessConsoleInput` и т.д.
+2. Добавьте `add_subdirectory(plugins/<Name>)` в корневой `CMakeLists.txt`.
+3. Соберите `build.bat` и установите `install-plugin.bat <Name>`.
+
+При сборке создаются `<Name>.dll`, `<Name>.lua` (склейка `LUA_FILES` по порядку) и `_globalinfo.lua`; установщик копирует их в `Plugins\<Name>`. У каждого Lua-плагина своя папка, GUID и скрипт, поэтому они не конфликтуют.
+
+Для цветного текста в стиле Markdown Viewer хост предоставляет Lua-глобал
+`luaplug_ui.ShowStyledText(title, lines)`: Lua описывает строки и сегменты
+(`style`, `indent`, `fence`, `lang`, `segments` с `text`, `style`, `bold`, `italic`,
+`underline`, `strike`, `fg`, `bg`, `hint`), а нативный хост рисует их, применяет
+темы (`F8`), поиск и навигацию. Палитра тем — общий заголовок
+`sdk/render/themes.hpp`. Подробный формат — в `.cursor/skills/far-plugin/SKILL.md`.
 
 ---
 
@@ -142,16 +210,19 @@ far-manager-plugins/
 │   ├── email-viewer/      # IMAP клиент
 │   ├── markdown-viewer/   # Markdown просмотрщик
 │   ├── pretty-viewer/     # JSON, YAML, XML
-│   ── ssh-client/        # SFTP панель
-── lua-plugins/
-│   └── html-viewer/       # HTML просмотрщик (Lua)
+│   ├── html-viewer/       # HTML просмотрщик (LuaFAR + Lua)
+│   ├── secret-vault/      # пароли и OpenSSH-ключи
+│   └── ssh-client/        # SFTP панель
+├── third_party/
+│   └── luafar/            # общий host Lua-плагинов (luaplug)
+├── cmake/
+│   └── LuaFarPlugin.cmake # add_luafar_plugin()
 ├── sdk/                   # FAR Manager API headers
 ├── .github/workflows/     # CI/CD (GitHub Actions)
 ├── CMakeLists.txt         # Основной CMake файл
-├── build.bat              # Сборка всех C++ плагинов
-├── install-all.bat        # Установка всех C++ плагинов
-├── uninstall-all.bat      # Удаление всех C++ плагинов
-└── install-lua-plugin.bat # Установка Lua плагинов
+├── build.bat              # Сборка всех плагинов
+├── install-all.bat        # Установка всех плагинов
+└── uninstall-all.bat      # Удаление всех плагинов
 ```
 
 ---
@@ -178,6 +249,12 @@ far-manager-plugins/
 - Последний параметр DlgProc — `void*`, не `intptr_t`
 - GUID должны быть `extern const` в header, определены в одном `.cpp`
 - `PluginInfo.PluginConfig.Count` должен соответствовать реальному количеству элементов
+
+---
+
+## 📄 История изменений
+
+См. [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

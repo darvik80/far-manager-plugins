@@ -35,13 +35,20 @@ if not exist "%INSTALL_DIR%" (
 
 echo Copying %DLL_FILE% -^> %INSTALL_DIR%\
 copy /y "%DLL_FILE%" "%INSTALL_DIR%\" >nul
+set "COPY_OK=%errorlevel%"
 
-if %errorlevel% equ 0 (
+if exist "%BUILD_DIR%\*.lua" (
+    echo Copying Lua scripts -^> %INSTALL_DIR%\
+    copy /y "%BUILD_DIR%\*.lua" "%INSTALL_DIR%\" >nul
+    if errorlevel 1 set "COPY_OK=1"
+)
+
+if "%COPY_OK%"=="0" (
     echo.
     echo Plugin installed successfully.
 ) else (
     echo.
-    echo ERROR: Failed to copy DLL.
+    echo ERROR: Failed to copy plugin files.
 )
 
 echo.

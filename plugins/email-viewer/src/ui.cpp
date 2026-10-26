@@ -497,16 +497,15 @@ static std::string WideToUtf8(const std::wstring& text) {
     return out;
 }
 
-static bool HasVisibleText(const std::string& text) {
-    return std::any_of(text.begin(), text.end(), [](unsigned char ch) { return ch > 32; });
-}
-
 void ShowMessageView(const PluginStartupInfo& info, const ImapMessageBody& msg) {
     std::string plain = msg.textBody;
     if (plain.find('<') != std::string::npos && plain.find('>') != std::string::npos)
         plain = htmlToPlainText(plain);
-    if (!HasVisibleText(plain))
-        plain = htmlToPlainText(msg.htmlBody);
+    else
+        plain = normalizeMailText(plain);
+    const std::string fromHtml = htmlToPlainText(msg.htmlBody);
+    if (visibleMailCount(fromHtml) > visibleMailCount(plain))
+        plain = fromHtml;
 
     const std::wstring subject = DecodeHeader(msg.subject.empty() ? "(без темы)" : msg.subject);
     std::wstring text;

@@ -24,6 +24,8 @@ add_library(${PLUGIN_NAME} SHARED
     src/ui.cpp
     src/ssh_config.cpp
     src/session_store.cpp
+    src/vault_link.cpp
+    src/teleport.cpp
     src/sftp_client.cpp
     src/panel.cpp
     exports.def
@@ -40,6 +42,7 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE
     _UNICODE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+    _CRT_SECURE_NO_WARNINGS
 )
 
 target_compile_options(${PLUGIN_NAME} PRIVATE /DLIBSSH2_API=)

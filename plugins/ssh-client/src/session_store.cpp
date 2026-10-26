@@ -1,5 +1,7 @@
 #include "session_store.hpp"
 #include "ssh_config.hpp"
+#include "teleport.hpp"
+#include "vault_link.hpp"
 
 #include <windows.h>
 
@@ -56,7 +58,10 @@ void SetField(StoredServer& server, const std::wstring& key, const std::wstring&
     else if (key == L"port") server.port = value.empty() ? L"22" : value;
     else if (key == L"user") server.user = value;
     else if (key == L"key") server.keyFile = value;
+    else if (key == L"vault_key") server.vaultKey = value;
+    else if (key == L"vault_password") server.vaultPassword = value;
     else if (key == L"proxy") server.proxy = value;
+    else if (key == L"teleport") server.fromTeleport = value == L"1" || value == L"true" || value == L"True";
     else if (key == L"password") server.password = Unescape(value);
 }
 
@@ -110,6 +115,35 @@ std::vector<StoredServer> LoadServers() {
         SetField(current, Lower(Trim(line.substr(0, eq))), line.substr(eq + 1));
     }
     flush();
+    static bool migratedOnce = false;
+    bool migrated = false;
+    if (!migratedOnce && VaultPluginPresent()) {
+        migratedOnce = true;
+        for (auto& server : servers) {
+            if (server.vaultPassword.empty() && !server.password.empty()) {
+                if (VaultStorePassword(server.name, server.password)) {
+                    server.vaultPassword = server.name;
+                    server.password.clear();
+                    migrated = true;
+                }
+            }
+            if (server.vaultKey.empty() && !server.keyFile.empty() &&
+                server.keyFile.find(L'\\') == std::wstring::npos && server.keyFile.find(L'/') == std::wstring::npos &&
+                server.keyFile.find(L'.') == std::wstring::npos) {
+                server.vaultKey = server.keyFile;
+                server.keyFile.clear();
+                migrated = true;
+            } else if (server.vaultKey.empty() && !server.keyFile.empty() &&
+                       (server.keyFile.find(L"BEGIN ") != std::wstring::npos || GetFileAttributesW(server.keyFile.c_str()) != INVALID_FILE_ATTRIBUTES)) {
+                if (VaultStoreKeyFile(server.name, server.keyFile)) {
+                    server.vaultKey = server.name;
+                    server.keyFile.clear();
+                    migrated = true;
+                }
+            }
+        }
+        if (migrated) SaveServers(servers);
+    }
     return servers;
 }
 
@@ -122,8 +156,12 @@ bool SaveServers(const std::vector<StoredServer>& servers) {
         text += L"port=" + (server.port.empty() ? L"22" : server.port) + L"\r\n";
         text += L"user=" + server.user + L"\r\n";
         text += L"key=" + server.keyFile + L"\r\n";
+        text += L"vault_key=" + server.vaultKey + L"\r\n";
+        text += L"vault_password=" + server.vaultPassword + L"\r\n";
         text += L"proxy=" + server.proxy + L"\r\n";
-        text += L"password=" + Escape(server.password) + L"\r\n";
+        if (server.fromTeleport) text += L"teleport=1\r\n";
+        if (server.vaultPassword.empty())
+            text += L"password=" + Escape(server.password) + L"\r\n";
     }
     int bytes = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
     std::string utf8(bytes > 0 ? bytes : 0, '\0');
@@ -142,6 +180,11 @@ std::vector<StoredServer> CombinedSites() {
     names.reserve(sites.size());
     for (const auto& site : sites) names.push_back(Lower(site.name));
 
+    for (const auto& host : TshHosts()) {
+        if (std::find(names.begin(), names.end(), Lower(host.name)) != names.end()) continue;
+        names.push_back(Lower(host.name));
+        sites.push_back(host);
+    }
     for (const auto& host : LoadSshHosts()) {
         if (std::find(names.begin(), names.end(), Lower(host.alias)) != names.end()) continue;
         StoredServer site;
@@ -164,6 +207,8 @@ std::vector<StoredServer> CombinedSites() {
             const auto& path = site.identityFiles.front();
             const auto pos = path.find_last_of(L"\\/");
             site.keyLabel = pos == std::wstring::npos ? path : path.substr(pos + 1);
+        } else if (site.fromTeleport) {
+            site.keyLabel = L"teleport";
         } else {
             site.keyLabel = site.password.empty() ? L"ssh-agent" : L"password";
         }

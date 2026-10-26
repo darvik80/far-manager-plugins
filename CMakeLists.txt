@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(far-plugins LANGUAGES CXX)
+project(far-plugins LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,7 +12,11 @@ endif()
 
 set(FAR_SDK_DIR ${CMAKE_SOURCE_DIR}/sdk)
 
+include(cmake/LuaFarPlugin.cmake)
+
 add_subdirectory(plugins/markdown-viewer)
 add_subdirectory(plugins/email-viewer)
 add_subdirectory(plugins/ssh-client)
+add_subdirectory(plugins/secret-vault)
 add_subdirectory(plugins/pretty-viewer)
+add_subdirectory(plugins/html-viewer)

@@ -70,8 +70,8 @@ intptr_t WINAPI ConfigureW(const ConfigureInfo*) {
     const wchar_t* items[] = {
         L"SSH",
         L"",
-        L"F7 new server, F4 edit, F8 delete.",
-        L"Enter opens the remote directory.",
+        L"F3 view host, F4 edit, F7 new, F8 delete.",
+        L"Enter opens SFTP. F2 or Shift+Enter opens an SSH terminal.",
         L"F5 copies files, F6 renames, F7 creates a folder.",
         line.c_str(),
     };

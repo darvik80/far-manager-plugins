@@ -18,7 +18,11 @@ cmake --build D:\Projects\cpp\far-manager\build-msvc --config Release --target <
 
 PowerShell rejects `&&`. Use `; if ($LASTEXITCODE -eq 0)`.
 
-Install only through `install-plugin.bat <Name>` or `install-all.bat`. They elevate and copy into `Plugins\<Name>`. Do not copy into Program Files from the agent. Far must be closed; a loaded DLL will not overwrite. Do not commit unless asked. Runtime is `MultiThreaded`. New exports go in `exports.def` with the next ordinal.
+Install only through `install-plugin.bat <Name>` or `install-all.bat`. They elevate and copy into `Plugins\<Name>`. Do not copy into Program Files from the agent. Far must be closed; a loaded DLL will not overwrite. Do not commit unless asked. Runtime is `MultiThreaded`. New C++ exports go in `exports.def` with the next ordinal.
+
+## LuaFAR plugins
+
+Do not write C++ for a Lua plugin. `cmake/LuaFarPlugin.cmake` exposes `add_luafar_plugin(<Name> LUA_FILES ...)`, and the generic `luaplug` host lives only in `third_party/luafar` (never copy it into a plugin). A Lua plugin dir contains `CMakeLists.txt`, `_globalinfo.lua` (unique GUID/title/version), and `lua/*.lua`. The host loads `_globalinfo.lua` and `<DLL name>.lua` from the DLL directory, so every plugin installs into its own `Plugins\<Name>` and the installer copies the generated `.lua` files next to the DLL. Behavior belongs in Lua. FAR's Lua strings are UTF-8-aware, so byte loops over binary data are wrong; see the BOM/UTF-16 helpers in HtmlViewer `plugin.lua`.
 
 ## Dialogs
 
@@ -34,6 +38,12 @@ The digit in Alt+F1/Alt+F2 is not part of `DiskMenu.Strings`. Far reads it from 
 
 `ProcessPanelInputW` runs only for the plugin that owns the active panel. F3 on a normal file panel needs `ProcessConsoleInputW`. Plain F3 means no Ctrl/Alt/Shift. F3 on the SSH panel is not seen by Markdown or Pretty Viewer; SSH downloads `.md`, `.json`, `.yaml`, `.yml`, and `.xml` and opens them with `Plugin.Command(pluginGuid, localPath)`. `ACTL_GETWINDOWTYPE` is 28: pass `WindowType { size_t StructSize; int Type; }`. Panels are `Type == 1`, or `Type == 0` and the call returned 1. Returning 1 swallows the key.
 
+Secret Vault stores passwords and OpenSSH keys in `%APPDATA%\Far Manager\SecretVault\vault.bin` via Windows DPAPI. SSH looks them up with `Plugin.SyncCall` (`OPEN_FROMMACRO`): verbs `lookup` / `list` / `store`. Do not use `Plugin.Command` for that call; it yields across a C boundary.
+
+If `tsh.exe` is on PATH, the SSH panel shows Teleport nodes from `tsh ls` and uses `tsh proxy ssh`. Expired certs: F6 runs `tsh login --mfa-mode=otp` in a new console so password+OTP can be typed (SSO/browser still works). `tsh proxy ssh` keeps `--no-relogin`: stdin is the SSH pipe, so a second OTP prompt there would break the handshake. Per-session MFA after login needs WebAuthn or a fresh F6 login. Do not auto-login on every panel refresh. F2 / Shift+Enter opens a real terminal: `tsh ssh --mfa-mode=otp` (OTP in that window) or `ssh.exe -t`. On the host list F3 shows the card, F4 edits (Teleport name/host/port are read-only).
+
 ## Viewers
 
 User-drawn text is a `DI_USERCONTROL` whose `VBuf` is `width * height` `FAR_CHAR_INFO`. Do not reallocate that buffer while the dialog is open. Repaint with `DM_REDRAW` (14). Fullscreen uses `ACTL_GETFARRECT` (24) and absolute dialog coordinates.
+
+LuaFAR's `SetFarDialogItem` cannot fill `DI_USERCONTROL.VBuf`, so colored Lua viewers go through the shared host: `luaplug_ui.ShowStyledText(title, lines)` is registered in `third_party/luafar/styled_viewer.cpp`. Each line is `{ style="normal|h1..h6|code|quote|hr|empty|table", indent=N, fence=0|1|2, lang="c", segments={...} }`; each segment is `{ text, style="normal|code|link|image|marker", bold, italic, underline, strike, fg=0xRRGGBB, bg=0xRRGGBB, hint }`. The host resolves the 16-theme palette from `sdk/render/themes.hpp`, handles F8/Shift+F8, F7 find, Ctrl+Up/Down headings, table layout, scrolling and mouse wheel. CSS foreground/background is only applied when its contrast against the effective background is >= 3:1; headings always keep theme colors. Do not add per-plugin native viewers — extend the shared one.

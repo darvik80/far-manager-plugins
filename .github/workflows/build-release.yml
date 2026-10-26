@@ -49,8 +49,16 @@ jobs:
       shell: pwsh
       run: |
         New-Item -ItemType Directory -Force -Path release-package | Out-Null
-        foreach ($name in @('EmailViewer', 'MarkdownViewer', 'PrettyViewer', 'SshClient')) {
+        foreach ($name in @('EmailViewer', 'HtmlViewer', 'MarkdownViewer', 'PrettyViewer', 'SecretVault', 'SshClient')) {
           Copy-Item "build\plugins\$name\Release\$name.dll" "release-package\$name.dll"
+        }
+        foreach ($dir in Get-ChildItem build\plugins -Directory) {
+          $lua = @(Get-ChildItem (Join-Path $dir.FullName 'Release') -Filter '*.lua' -ErrorAction SilentlyContinue)
+          if ($lua.Count -gt 0) {
+            $dest = "release-package\lua\$($dir.Name)"
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            $lua | Copy-Item -Destination $dest
+          }
         }
         Get-ChildItem 'C:\Program Files\OpenSSL\bin' -Include 'libcrypto-*-x64.dll','libssl-*-x64.dll' -Recurse |
           Copy-Item -Destination release-package
@@ -64,12 +72,13 @@ jobs:
             powershell -Command "Start-Process '%~f0' -Verb RunAs"
             exit /b
         )
-        for %%p in (EmailViewer MarkdownViewer PrettyViewer SshClient) do (
+        for %%p in (EmailViewer HtmlViewer MarkdownViewer PrettyViewer SecretVault SshClient) do (
             set "DEST_DIR=%INSTALL_DIR%\%%p"
             if not exist "!DEST_DIR!" mkdir "!DEST_DIR!"
             copy /y "%~dp0%%p.dll" "!DEST_DIR!\" >nul
             copy /y "%~dp0libcrypto-*-x64.dll" "!DEST_DIR!\" >nul
             copy /y "%~dp0libssl-*-x64.dll" "!DEST_DIR!\" >nul
+            if exist "%~dp0lua\%%p" xcopy /y /q "%~dp0lua\%%p\*" "!DEST_DIR!\" >nul
             if errorlevel 1 (echo [FAIL] %%p) else (echo [OK] %%p)
         )
         echo Done.

@@ -3,7 +3,9 @@
 #include "session_store.hpp"
 #include "sftp_client.hpp"
 #include "ssh_config.hpp"
+#include "teleport.hpp"
 #include "ui.hpp"
+#include "vault_link.hpp"
 
 #include <algorithm>
 #include <map>
@@ -214,6 +216,7 @@ struct SshPanel {
     std::wstring curDir = L"\\";
     SftpConnection connection;
     std::vector<StoredServer> cached;
+    StoredServer current;
 
     static bool Live(void* panel) { return g_live.count(panel) != 0; }
 
@@ -230,11 +233,13 @@ struct SshPanel {
         title = L" SSH ";
         format = L"SSH";
         curDir = L"\\";
+        current = {};
         cached = CombinedSites();
     }
 
     void OpenSite(const StoredServer& site) {
         sites = false;
+        current = site;
         remote = connection.Home();
         const std::wstring who = site.user.empty() ? site.host : site.user + L"@" + site.host;
         title = L" " + who + L" ";
@@ -267,14 +272,14 @@ bool EditServer(StoredServer& server, bool create) {
     wcsncpy_s(host, server.host.c_str(), _TRUNCATE);
     wcsncpy_s(port, server.port.empty() ? L"22" : server.port.c_str(), _TRUNCATE);
     wcsncpy_s(user, server.user.c_str(), _TRUNCATE);
-    wcsncpy_s(key, server.keyFile.c_str(), _TRUNCATE);
+    wcsncpy_s(key, server.keyFile.empty() ? server.vaultKey.c_str() : server.keyFile.c_str(), _TRUNCATE);
     wcsncpy_s(proxy, server.proxy.c_str(), _TRUNCATE);
     wcsncpy_s(password, server.password.c_str(), _TRUNCATE);
 
     FarDialogItem items[17]{};
     items[0].Type = DI_DOUBLEBOX;
     items[0].X1 = 0; items[0].Y1 = 0; items[0].X2 = 62; items[0].Y2 = 12;
-    items[0].Data = create ? L" Новый сервер " : L" Сервер ";
+    items[0].Data = create ? L" Новый сервер " : (server.fromTeleport ? L" Teleport " : L" Сервер ");
     const wchar_t* labels[] = { L"Имя", L"Адрес", L"Порт", L"Логин", L"Ключ", L"Прокси", L"Пароль" };
     wchar_t* buffers[] = { name, host, port, user, key, proxy, password };
     const size_t sizes[] = { std::size(name), std::size(host), std::size(port), std::size(user), std::size(key), std::size(proxy), std::size(password) };
@@ -282,13 +287,21 @@ bool EditServer(StoredServer& server, bool create) {
         items[1 + i * 2].Type = DI_TEXT;
         items[1 + i * 2].X1 = 2;
         items[1 + i * 2].Y1 = 2 + i;
+        items[1 + i * 2].Y2 = 2 + i;
         items[1 + i * 2].Data = labels[i];
         items[2 + i * 2].Type = i == 6 ? DI_PSWEDIT : DI_EDIT;
         items[2 + i * 2].X1 = 12;
         items[2 + i * 2].Y1 = 2 + i;
         items[2 + i * 2].X2 = 59;
+        items[2 + i * 2].Y2 = 2 + i;
         items[2 + i * 2].Data = buffers[i];
         items[2 + i * 2].MaxLength = static_cast<intptr_t>(sizes[i] - 1);
+    }
+    if (!create && server.fromTeleport) {
+        items[2].Flags |= DIF_READONLY;
+        items[4].Flags |= DIF_READONLY;
+        items[6].Flags |= DIF_READONLY;
+        items[8].Flags |= DIF_FOCUS;
     }
     items[15].Type = DI_BUTTON;
     items[15].X1 = 24;
@@ -327,11 +340,48 @@ bool EditServer(StoredServer& server, bool create) {
     server.host = host;
     server.port = port[0] ? port : L"22";
     server.user = user;
-    server.keyFile = key;
     server.proxy = proxy;
-    server.password = password;
     server.fromConfig = false;
+    if (key[0] && GetFileAttributesW(key) != INVALID_FILE_ATTRIBUTES) {
+        server.keyFile = key;
+    } else {
+        server.vaultKey = key;
+        server.keyFile.clear();
+    }
+    if (password[0]) {
+        server.password = password;
+        if (VaultPluginPresent() && VaultStorePassword(name, password)) {
+            server.vaultPassword = name;
+            server.password.clear();
+        }
+    }
     return true;
+}
+
+void ShowHost(const StoredServer& site) {
+    const std::wstring name = L"Имя: " + site.name;
+    const std::wstring source = site.fromTeleport ? L"Источник: Teleport (tsh)"
+        : site.fromConfig ? L"Источник: ~/.ssh/config"
+        : L"Источник: SSH-плагин";
+    const std::wstring host = L"Адрес: " + site.host;
+    const std::wstring port = L"Порт: " + (site.port.empty() ? L"22" : site.port);
+    const std::wstring user = L"Логин: " + (site.user.empty() ? L"(по умолчанию)" : site.user);
+    std::wstring key = L"Ключ: ";
+    if (!site.keyFile.empty()) key += site.keyFile;
+    else if (!site.vaultKey.empty()) key += site.vaultKey + L" (vault)";
+    else if (!site.identityFiles.empty()) key += site.identityFiles.front();
+    else if (!site.keyLabel.empty()) key += site.keyLabel;
+    else key += L"(ssh-agent)";
+    const std::wstring proxy = site.fromTeleport ? L"Прокси: tsh proxy ssh"
+        : site.proxy.empty() ? L"Прокси: —" : L"Прокси: " + site.proxy;
+    const std::wstring vault = site.vaultPassword.empty() ? L"Пароль vault: —"
+        : L"Пароль vault: " + site.vaultPassword;
+    const wchar_t* lines[] = {
+        L"Сервер", L"",
+        name.c_str(), source.c_str(), host.c_str(), port.c_str(),
+        user.c_str(), key.c_str(), proxy.c_str(), vault.c_str(),
+    };
+    g_info.Message(MainGuid, MenuGuid, FMSG_LEFTALIGN | FMSG_MB_OK, nullptr, lines, 10, 1);
 }
 
 bool Upsert(StoredServer server) {
@@ -545,6 +595,8 @@ void WINAPI GetOpenPanelInfoW(OpenPanelInfo* info) {
     info->hPanel = panel;
     info->Flags = kAddDots | kPreserveCase | kAttrHighlight;
     info->Format = panel->format.c_str();
+    if (panel->sites && TshAvailable())
+        panel->title = TshLoggedIn() ? L" SSH · Teleport " : L" SSH · F6 tsh login ";
     info->PanelTitle = panel->title.c_str();
     info->CurDir = panel->curDir.c_str();
     static const wchar_t* siteTitles[] = { L"Имя", L"Адрес", L"Ключ" };
@@ -552,15 +604,17 @@ void WINAPI GetOpenPanelInfoW(OpenPanelInfo* info) {
     static const PanelMode sitesMode{ L"N,C0,C1", L"0,30,24", siteTitles, L"N,C0", L"0,0", 1 };
     static const PanelMode fileMode{ L"N,S,DM", L"0,12,14", fileTitles, L"N,S", L"0,10", 1 };
     static KeyLabel siteKeys[] = {
-        {{VK_F3, 0}, L"", L""},
+        {{VK_F2, 0}, L"Терм", L"SSH-терминал"},
+        {{VK_F3, 0}, L"Инфо", L"Карточка сервера"},
         {{VK_F4, 0}, L"Сервер", L"Изменить сервер"},
         {{VK_F5, 0}, L"", L""},
-        {{VK_F6, 0}, L"", L""},
+        {{VK_F6, 0}, TshAvailable() ? L"tsh" : L"", TshAvailable() ? L"tsh login" : L""},
         {{VK_F7, 0}, L"Новый", L"Новый сервер"},
         {{VK_F8, 0}, L"Удал", L"Удалить сервер"},
         {{VK_F4, SHIFT_PRESSED}, L"Новый", L"Новый сервер"},
     };
     static KeyLabel fileKeys[] = {
+        {{VK_F2, 0}, L"Терм", L"SSH-терминал"},
         {{VK_F3, 0}, L"Просм", L"Просмотр"},
         {{VK_F4, 0}, L"Редак", L"Редактирование"},
         {{VK_F5, 0}, L"Копир", L"Копирование"},
@@ -591,7 +645,9 @@ intptr_t WINAPI GetFindDataW(GetFindDataInfo* info) {
             row.host = (site.user.empty() ? L"" : site.user + L"@") + site.host;
             if (!site.port.empty() && site.port != L"22") row.host += L":" + site.port;
             if (!site.proxy.empty()) row.host += L" via " + site.proxy;
-            row.key = site.fromConfig ? site.keyLabel + L"  config" : site.keyLabel;
+            if (site.fromTeleport) row.key = site.keyLabel + L"  tsh";
+            else if (site.fromConfig) row.key = site.keyLabel + L"  config";
+            else row.key = site.keyLabel;
             PluginPanelItem item{};
             FillItem(item, row.name, true, 0, 0);
             rows.push_back(std::move(row));
@@ -723,6 +779,11 @@ intptr_t WINAPI DeleteFilesW(const DeleteFilesInfo* info) {
             const wchar_t* name = info->PanelItem[i].FileName;
             if (!name) continue;
             const StoredServer* site = panel->Find(name);
+            if (site && site->fromTeleport) {
+                if ((info->OpMode & kSilent) == 0)
+                    Say(L"Этот сервер из tsh ls и не удаляется отсюда.");
+                continue;
+            }
             if (site && site->fromConfig) {
                 if ((info->OpMode & kSilent) == 0)
                     Say(L"Этот сервер задан в ~/.ssh/config и не удаляется отсюда.");
@@ -772,12 +833,51 @@ intptr_t WINAPI ProcessPanelInputW(const ProcessPanelInputInfo* info) {
     const bool ctrl = (key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
     const bool alt = (key.dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
 
-    if (panel->sites && (key.wVirtualKeyCode == VK_F3 || key.wVirtualKeyCode == VK_F5 || key.wVirtualKeyCode == VK_F6) && !ctrl && !alt)
+    const bool terminalKey =
+        (key.wVirtualKeyCode == VK_F2 && !shift && !ctrl && !alt) ||
+        (key.wVirtualKeyCode == VK_RETURN && shift && !ctrl && !alt);
+    if (terminalKey) {
+        const StoredServer* site = nullptr;
+        StoredServer owned;
+        if (panel->sites) {
+            const std::wstring name = CurrentName();
+            if (!name.empty() && name != L"..") site = panel->Find(name);
+        } else if (!panel->current.host.empty()) {
+            owned = panel->current;
+            site = &owned;
+        }
+        if (site) {
+            std::wstring error;
+            if (!OpenSshTerminal(*site, error) && !error.empty()) Say(error.c_str());
+        }
         return 1;
-    if (panel->sites && (key.wVirtualKeyCode == VK_F7 || (key.wVirtualKeyCode == VK_F4 && shift))) {
+    }
+    if (panel->sites && key.wVirtualKeyCode == VK_F6 && !shift && !ctrl && !alt) {
+        if (TshAvailable()) {
+            std::wstring error;
+            if (!TshLogin(error) && !error.empty()) Say(error.c_str());
+            if (g_info.PanelControl) {
+                g_info.PanelControl(PANEL_ACTIVE, FCTL_UPDATEPANEL, 1, nullptr);
+                g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
+            }
+        }
+        return 1;
+    }
+    if (panel->sites && key.wVirtualKeyCode == VK_F5 && !ctrl && !alt)
+        return 1;
+    if (panel->sites && key.wVirtualKeyCode == VK_F3 && !shift && !ctrl && !alt) {
+        const std::wstring name = CurrentName();
+        const StoredServer* site = panel->Find(name);
+        if (site) ShowHost(*site);
+        return 1;
+    }
+    if (panel->sites && !ctrl && !alt && (key.wVirtualKeyCode == VK_F7 || (key.wVirtualKeyCode == VK_F4 && shift))) {
         StoredServer server;
         if (EditServer(server, true)) Upsert(server);
-        if (g_info.PanelControl) g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
+        if (g_info.PanelControl) {
+            g_info.PanelControl(PANEL_ACTIVE, FCTL_UPDATEPANEL, 1, nullptr);
+            g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
+        }
         return 1;
     }
     if (panel->sites && key.wVirtualKeyCode == VK_F4 && !shift && !ctrl && !alt) {
@@ -785,8 +885,15 @@ intptr_t WINAPI ProcessPanelInputW(const ProcessPanelInputInfo* info) {
         const StoredServer* site = panel->Find(name);
         if (!site) return 1;
         StoredServer edited = *site;
-        if (EditServer(edited, false)) Upsert(edited);
-        if (g_info.PanelControl) g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
+        const bool tsh = site->fromTeleport;
+        if (EditServer(edited, false)) {
+            if (tsh) edited.fromTeleport = true;
+            Upsert(edited);
+        }
+        if (g_info.PanelControl) {
+            g_info.PanelControl(PANEL_ACTIVE, FCTL_UPDATEPANEL, 1, nullptr);
+            g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
+        }
         return 1;
     }
     if (!panel->sites && key.wVirtualKeyCode == VK_F3 && !shift && !ctrl && !alt) {

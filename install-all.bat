@@ -14,8 +14,9 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-for %%p in (EmailViewer MarkdownViewer PrettyViewer SshClient) do (
-    set "DLL_FILE=%BUILD_DIR%\%%p\Release\%%p.dll"
+for %%p in (EmailViewer HtmlViewer MarkdownViewer PrettyViewer SecretVault SshClient) do (
+    set "PLUGIN_DIR=%BUILD_DIR%\%%p\Release"
+    set "DLL_FILE=!PLUGIN_DIR!\%%p.dll"
     set "DEST_DIR=%INSTALL_DIR%\%%p"
 
     if not exist "!DLL_FILE!" (
@@ -23,6 +24,7 @@ for %%p in (EmailViewer MarkdownViewer PrettyViewer SshClient) do (
     ) else (
         if not exist "!DEST_DIR!" mkdir "!DEST_DIR!"
         copy /y "!DLL_FILE!" "!DEST_DIR!\" >nul
+        if exist "!PLUGIN_DIR!\*.lua" copy /y "!PLUGIN_DIR!\*.lua" "!DEST_DIR!\" >nul
         if !errorlevel! equ 0 (
             echo [OK]   %%p
         ) else (

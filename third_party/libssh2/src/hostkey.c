@@ -948,7 +948,8 @@ hostkey_method_ssh_ecdsa_sig_verify(LIBSSH2_SESSION * session,
     buf.dataptr = buf.data;
     buf.len = sig_len;
 
-    if(_libssh2_get_string(&buf, &name, &name_len) || name_len != 19)
+    if(_libssh2_get_string(&buf, &name, &name_len) ||
+       (name_len != 19 && name_len != 40))
         return -1;
 
     if(_libssh2_get_u32(&buf, &len) != 0 || len < 8)
@@ -961,6 +962,85 @@ hostkey_method_ssh_ecdsa_sig_verify(LIBSSH2_SESSION * session,
         return -1;
 
     return _libssh2_ecdsa_verify(ctx, r, r_len, s, s_len, m, m_len);
+}
+
+/*
+ * OpenSSH ECDSA host certificates (Teleport): type, nonce, curve, Q, ...
+ * Reuse the inner public key so KEX can verify the host signature.
+ */
+static int
+hostkey_method_ssh_ecdsa_cert_init(LIBSSH2_SESSION * session,
+                                   const unsigned char *hostkey_data,
+                                   size_t hostkey_data_len,
+                                   void **abstract)
+{
+    libssh2_ecdsa_ctx *ecdsactx = NULL;
+    unsigned char *type_str, *domain, *public_key, *nonce;
+    size_t key_len, len;
+    libssh2_curve_type type;
+    struct string_buf buf;
+
+    if(abstract && *abstract) {
+        hostkey_method_ssh_ecdsa_dtor(session, abstract);
+        *abstract = NULL;
+    }
+
+    buf.data = (unsigned char *)hostkey_data;
+    buf.dataptr = buf.data;
+    buf.len = hostkey_data_len;
+
+    if(_libssh2_get_string(&buf, &type_str, &len))
+        return -1;
+
+    if(len == 40 &&
+       strncmp((char *)type_str, "ecdsa-sha2-nistp256-cert-v01@openssh.com",
+               40) == 0) {
+        type = LIBSSH2_EC_CURVE_NISTP256;
+    }
+    else if(len == 40 &&
+            strncmp((char *)type_str,
+                    "ecdsa-sha2-nistp384-cert-v01@openssh.com", 40) == 0) {
+        type = LIBSSH2_EC_CURVE_NISTP384;
+    }
+    else if(len == 40 &&
+            strncmp((char *)type_str,
+                    "ecdsa-sha2-nistp521-cert-v01@openssh.com", 40) == 0) {
+        type = LIBSSH2_EC_CURVE_NISTP521;
+    }
+    else {
+        return -1;
+    }
+
+    if(_libssh2_get_string(&buf, &nonce, &len))
+        return -1;
+    (void)nonce;
+    if(_libssh2_get_string(&buf, &domain, &len) || len != 8)
+        return -1;
+
+    if(type == LIBSSH2_EC_CURVE_NISTP256 &&
+       strncmp((char *)domain, "nistp256", 8) != 0) {
+        return -1;
+    }
+    else if(type == LIBSSH2_EC_CURVE_NISTP384 &&
+            strncmp((char *)domain, "nistp384", 8) != 0) {
+        return -1;
+    }
+    else if(type == LIBSSH2_EC_CURVE_NISTP521 &&
+            strncmp((char *)domain, "nistp521", 8) != 0) {
+        return -1;
+    }
+
+    if(_libssh2_get_string(&buf, &public_key, &key_len))
+        return -1;
+
+    if(_libssh2_ecdsa_curve_name_with_octal_new(&ecdsactx, public_key,
+                                                key_len, type))
+        return -1;
+
+    if(abstract)
+        *abstract = ecdsactx;
+
+    return 0;
 }
 
 
@@ -1085,10 +1165,10 @@ static const LIBSSH2_HOSTKEY_METHOD hostkey_method_ecdsa_ssh_nistp521 = {
 static const LIBSSH2_HOSTKEY_METHOD hostkey_method_ecdsa_ssh_nistp256_cert = {
     "ecdsa-sha2-nistp256-cert-v01@openssh.com",
     SHA256_DIGEST_LENGTH,
-    NULL,
+    hostkey_method_ssh_ecdsa_cert_init,
     hostkey_method_ssh_ecdsa_initPEM,
     hostkey_method_ssh_ecdsa_initPEMFromMemory,
-    NULL,
+    hostkey_method_ssh_ecdsa_sig_verify,
     hostkey_method_ssh_ecdsa_signv,
     NULL,                       /* encrypt */
     hostkey_method_ssh_ecdsa_dtor,
@@ -1097,10 +1177,10 @@ static const LIBSSH2_HOSTKEY_METHOD hostkey_method_ecdsa_ssh_nistp256_cert = {
 static const LIBSSH2_HOSTKEY_METHOD hostkey_method_ecdsa_ssh_nistp384_cert = {
     "ecdsa-sha2-nistp384-cert-v01@openssh.com",
     SHA384_DIGEST_LENGTH,
-    NULL,
+    hostkey_method_ssh_ecdsa_cert_init,
     hostkey_method_ssh_ecdsa_initPEM,
     hostkey_method_ssh_ecdsa_initPEMFromMemory,
-    NULL,
+    hostkey_method_ssh_ecdsa_sig_verify,
     hostkey_method_ssh_ecdsa_signv,
     NULL,                       /* encrypt */
     hostkey_method_ssh_ecdsa_dtor,
@@ -1109,10 +1189,10 @@ static const LIBSSH2_HOSTKEY_METHOD hostkey_method_ecdsa_ssh_nistp384_cert = {
 static const LIBSSH2_HOSTKEY_METHOD hostkey_method_ecdsa_ssh_nistp521_cert = {
     "ecdsa-sha2-nistp521-cert-v01@openssh.com",
     SHA512_DIGEST_LENGTH,
-    NULL,
+    hostkey_method_ssh_ecdsa_cert_init,
     hostkey_method_ssh_ecdsa_initPEM,
     hostkey_method_ssh_ecdsa_initPEMFromMemory,
-    NULL,
+    hostkey_method_ssh_ecdsa_sig_verify,
     hostkey_method_ssh_ecdsa_signv,
     NULL,                       /* encrypt */
     hostkey_method_ssh_ecdsa_dtor,
