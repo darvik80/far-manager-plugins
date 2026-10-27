@@ -96,7 +96,7 @@ IMAP-клиент для просмотра электронной почты п
 - Создание ключей ed25519 и RSA 3072 через `ssh-keygen`, импорт OpenSSH-файлов
 - Копирование секрета в буфер (`F5` / `Ctrl+C`), очистка через 30 секунд
 - Экспорт/импорт файла с паролем (AES-256-GCM)
-- Синк с NoteKeeper: HTTPS, PAT в DPAPI (`NoteKeeper\settings.ini`), scope `vault`
+- Синк с [NoteKeeper](https://github.com/darvik80/note-keeper): HTTPS, PAT в DPAPI (`NoteKeeper\settings.ini`), [scope `vault`](https://github.com/darvik80/note-keeper#what-it-does)
 - SSH берёт пароль и ключ по имени записи через `Plugin.SyncCall` (только SSH Client); если плагин не ответил — NoteKeeper REST `/api/v1/vault`
 
 **Использование:**
@@ -113,7 +113,7 @@ IMAP-клиент для просмотра электронной почты п
 
 ### NoteKeeper
 
-Панель notes и todos с сервера NoteKeeper.
+Панель notes и todos с сервера [NoteKeeper](https://github.com/darvik80/note-keeper).
 
 **Возможности:**
 - Каталоги `Notes` и `Todos`
@@ -310,4 +310,5 @@ Pull requests приветствуются! Для крупных изменен
 ##  Контакты
 
 - Repository: https://github.com/darvik80/far-manager-plugins
+- NoteKeeper: https://github.com/darvik80/note-keeper
 - Author: darvik80
