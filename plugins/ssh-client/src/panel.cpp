@@ -276,47 +276,135 @@ bool EditServer(StoredServer& server, bool create) {
     wcsncpy_s(proxy, server.proxy.c_str(), _TRUNCATE);
     wcsncpy_s(password, server.password.c_str(), _TRUNCATE);
 
-    FarDialogItem items[17]{};
+    FarDialogItem items[18]{};
     items[0].Type = DI_DOUBLEBOX;
-    items[0].X1 = 0; items[0].Y1 = 0; items[0].X2 = 62; items[0].Y2 = 12;
+    items[0].X1 = 0;
+    items[0].Y1 = 0;
+    items[0].X2 = 62;
+    items[0].Y2 = 14;
     items[0].Data = create ? L" Новый сервер " : (server.fromTeleport ? L" Teleport " : L" Сервер ");
-    const wchar_t* labels[] = { L"Имя", L"Адрес", L"Порт", L"Логин", L"Ключ", L"Прокси", L"Пароль" };
-    wchar_t* buffers[] = { name, host, port, user, key, proxy, password };
-    const size_t sizes[] = { std::size(name), std::size(host), std::size(port), std::size(user), std::size(key), std::size(proxy), std::size(password) };
-    for (int i = 0; i < 7; ++i) {
-        items[1 + i * 2].Type = DI_TEXT;
-        items[1 + i * 2].X1 = 2;
-        items[1 + i * 2].Y1 = 2 + i;
-        items[1 + i * 2].Y2 = 2 + i;
-        items[1 + i * 2].Data = labels[i];
-        items[2 + i * 2].Type = i == 6 ? DI_PSWEDIT : DI_EDIT;
-        items[2 + i * 2].X1 = 12;
-        items[2 + i * 2].Y1 = 2 + i;
-        items[2 + i * 2].X2 = 59;
-        items[2 + i * 2].Y2 = 2 + i;
-        items[2 + i * 2].Data = buffers[i];
-        items[2 + i * 2].MaxLength = static_cast<intptr_t>(sizes[i] - 1);
-    }
+
+    items[1].Type = DI_TEXT;
+    items[1].X1 = 2;
+    items[1].Y1 = 2;
+    items[1].Y2 = 2;
+    items[1].Data = L"Имя:";
+    items[2].Type = DI_EDIT;
+    items[2].X1 = 12;
+    items[2].Y1 = 2;
+    items[2].X2 = 60;
+    items[2].Y2 = 2;
+    items[2].Data = name;
+    items[2].MaxLength = 127;
+    items[2].Flags = DIF_FOCUS;
+
+    items[3].Type = DI_TEXT;
+    items[3].X1 = 2;
+    items[3].Y1 = 4;
+    items[3].Y2 = 4;
+    items[3].Data = L"Адрес:";
+    items[4].Type = DI_EDIT;
+    items[4].X1 = 12;
+    items[4].Y1 = 4;
+    items[4].X2 = 60;
+    items[4].Y2 = 4;
+    items[4].Data = host;
+    items[4].MaxLength = 255;
+
+    items[5].Type = DI_TEXT;
+    items[5].X1 = 2;
+    items[5].Y1 = 6;
+    items[5].Y2 = 6;
+    items[5].Data = L"Порт:";
+    items[6].Type = DI_EDIT;
+    items[6].X1 = 12;
+    items[6].Y1 = 6;
+    items[6].X2 = 18;
+    items[6].Y2 = 6;
+    items[6].Data = port;
+    items[6].MaxLength = 5;
+
+    items[7].Type = DI_TEXT;
+    items[7].X1 = 21;
+    items[7].Y1 = 6;
+    items[7].Y2 = 6;
+    items[7].Data = L"Логин:";
+    items[8].Type = DI_EDIT;
+    items[8].X1 = 29;
+    items[8].Y1 = 6;
+    items[8].X2 = 60;
+    items[8].Y2 = 6;
+    items[8].Data = user;
+    items[8].MaxLength = 127;
+
+    items[9].Type = DI_TEXT;
+    items[9].X1 = 2;
+    items[9].Y1 = 8;
+    items[9].Y2 = 8;
+    items[9].Data = L"Ключ:";
+    items[10].Type = DI_EDIT;
+    items[10].X1 = 12;
+    items[10].Y1 = 8;
+    items[10].X2 = 60;
+    items[10].Y2 = 8;
+    items[10].Data = key;
+    items[10].MaxLength = 519;
+
+    items[11].Type = DI_TEXT;
+    items[11].X1 = 2;
+    items[11].Y1 = 10;
+    items[11].Y2 = 10;
+    items[11].Data = L"Прокси:";
+    items[12].Type = DI_EDIT;
+    items[12].X1 = 12;
+    items[12].Y1 = 10;
+    items[12].X2 = 32;
+    items[12].Y2 = 10;
+    items[12].Data = proxy;
+    items[12].MaxLength = 255;
+
+    items[13].Type = DI_TEXT;
+    items[13].X1 = 35;
+    items[13].Y1 = 10;
+    items[13].Y2 = 10;
+    items[13].Data = L"Пароль:";
+    items[14].Type = DI_PSWEDIT;
+    items[14].X1 = 44;
+    items[14].Y1 = 10;
+    items[14].X2 = 60;
+    items[14].Y2 = 10;
+    items[14].Data = password;
+    items[14].MaxLength = 255;
+
+    items[15].Type = DI_TEXT;
+    items[15].Y1 = 11;
+    items[15].Flags = DIF_SEPARATOR;
+
+    items[16].Type = DI_BUTTON;
+    items[16].X1 = 18;
+    items[16].Y1 = 12;
+    items[16].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
+    items[16].Data = L"Сохранить";
+    items[17].Type = DI_BUTTON;
+    items[17].X1 = 34;
+    items[17].Y1 = 12;
+    items[17].Flags = DIF_CENTERGROUP;
+    items[17].Data = L"Отмена";
+
     if (!create && server.fromTeleport) {
-        items[2].Flags |= DIF_READONLY;
+        items[2].Flags = DIF_READONLY;
         items[4].Flags |= DIF_READONLY;
         items[6].Flags |= DIF_READONLY;
         items[8].Flags |= DIF_FOCUS;
     }
-    items[15].Type = DI_BUTTON;
-    items[15].X1 = 24;
-    items[15].Y1 = 10;
-    items[15].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
-    items[15].Data = L"Сохранить";
-    items[16].Type = DI_BUTTON;
-    items[16].Y1 = 10;
-    items[16].Flags = DIF_CENTERGROUP;
-    items[16].Data = L"Отмена";
 
-    HANDLE dialog = g_info.DialogInit(MainGuid, MenuGuid, -1, -1, 63, 13, nullptr, items, 17, 0, 0, nullptr, 0);
-    if (!dialog || dialog == INVALID_HANDLE_VALUE) return false;
+    HANDLE dialog = OpenGuardedDialog(items, 18, 63, 15, 17);
+    if (!dialog || dialog == INVALID_HANDLE_VALUE) {
+        Say(L"Не удалось открыть диалог сервера.");
+        return false;
+    }
     const intptr_t result = g_info.DialogRun(dialog);
-    const bool saved = result == 15;
+    const bool saved = result == 16;
     if (saved) {
         auto text = [&](int id, wchar_t* buffer, size_t size) {
             const wchar_t* value = reinterpret_cast<const wchar_t*>(g_info.SendDlgMessage(dialog, kGetText, id, nullptr));
@@ -410,6 +498,46 @@ std::wstring CurrentName() {
     query.Item = item;
     if (g_info.PanelControl(PANEL_ACTIVE, kGetCurrentItem, 0, &query) == 0 || !item->FileName) return {};
     return item->FileName;
+}
+
+const intptr_t kHotkeyCreate = 1;
+const intptr_t kHotkeyEdit = 2;
+HANDLE g_hotkeyPanel = nullptr;
+
+void RefreshPanel() {
+    if (!g_info.PanelControl) return;
+    g_info.PanelControl(PANEL_ACTIVE, FCTL_UPDATEPANEL, 1, nullptr);
+    g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
+}
+
+void RunSshHotkey(intptr_t action) {
+    auto* panel = PanelOf(g_hotkeyPanel);
+    if (!panel || !panel->sites) return;
+    if (action == kHotkeyCreate) {
+        StoredServer server;
+        if (EditServer(server, true)) Upsert(server);
+    } else {
+        const std::wstring name = CurrentName();
+        const StoredServer* site = panel->Find(name);
+        if (site) {
+            StoredServer edited = *site;
+            const bool tsh = site->fromTeleport;
+            if (EditServer(edited, false)) {
+                if (tsh) edited.fromTeleport = true;
+                Upsert(edited);
+            }
+        }
+    }
+    panel->cached = CombinedSites();
+    RefreshPanel();
+}
+
+bool PostSshHotkey(HANDLE hPanel, intptr_t action) {
+    g_hotkeyPanel = hPanel;
+    if (g_info.AdvControl && g_info.AdvControl(MainGuid, ACTL_SYNCHRO, 0, reinterpret_cast<void*>(action)))
+        return true;
+    RunSshHotkey(action);
+    return true;
 }
 
 bool CurrentFile(std::wstring& name, bool& directory) {
@@ -824,14 +952,32 @@ intptr_t WINAPI MakeDirectoryW(MakeDirectoryInfo* info) {
     return 1;
 }
 
+intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* info) {
+    if (!info || info->Event != SE_COMMONSYNCHRO) return 0;
+    RunSshHotkey(reinterpret_cast<intptr_t>(info->Param));
+    return 0;
+}
+
 intptr_t WINAPI ProcessPanelInputW(const ProcessPanelInputInfo* info) {
-    if (!info || info->Rec.EventType != KEY_EVENT || !info->Rec.Event.KeyEvent.bKeyDown) return 0;
+    if (!info || (info->Rec.EventType & 0x7FFF) != KEY_EVENT || !info->Rec.Event.KeyEvent.bKeyDown) return 0;
     auto* panel = PanelOf(info->hPanel);
     if (!panel) return 0;
     const KEY_EVENT_RECORD& key = info->Rec.Event.KeyEvent;
-    const bool shift = (key.dwControlKeyState & SHIFT_PRESSED) != 0;
+    const bool macro = (info->Rec.EventType & 0x8000) != 0;
+    const bool shift = (key.dwControlKeyState & SHIFT_PRESSED) != 0 ||
+                       (macro && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
     const bool ctrl = (key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
     const bool alt = (key.dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+
+    if (panel->sites && !ctrl && !alt &&
+        (key.wVirtualKeyCode == VK_F7 || (key.wVirtualKeyCode == VK_F4 && shift))) {
+        PostSshHotkey(info->hPanel, kHotkeyCreate);
+        return 1;
+    }
+    if (panel->sites && key.wVirtualKeyCode == VK_F4 && !shift && !ctrl && !alt) {
+        PostSshHotkey(info->hPanel, kHotkeyEdit);
+        return 1;
+    }
 
     const bool terminalKey =
         (key.wVirtualKeyCode == VK_F2 && !shift && !ctrl && !alt) ||
@@ -869,31 +1015,6 @@ intptr_t WINAPI ProcessPanelInputW(const ProcessPanelInputInfo* info) {
         const std::wstring name = CurrentName();
         const StoredServer* site = panel->Find(name);
         if (site) ShowHost(*site);
-        return 1;
-    }
-    if (panel->sites && !ctrl && !alt && (key.wVirtualKeyCode == VK_F7 || (key.wVirtualKeyCode == VK_F4 && shift))) {
-        StoredServer server;
-        if (EditServer(server, true)) Upsert(server);
-        if (g_info.PanelControl) {
-            g_info.PanelControl(PANEL_ACTIVE, FCTL_UPDATEPANEL, 1, nullptr);
-            g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
-        }
-        return 1;
-    }
-    if (panel->sites && key.wVirtualKeyCode == VK_F4 && !shift && !ctrl && !alt) {
-        const std::wstring name = CurrentName();
-        const StoredServer* site = panel->Find(name);
-        if (!site) return 1;
-        StoredServer edited = *site;
-        const bool tsh = site->fromTeleport;
-        if (EditServer(edited, false)) {
-            if (tsh) edited.fromTeleport = true;
-            Upsert(edited);
-        }
-        if (g_info.PanelControl) {
-            g_info.PanelControl(PANEL_ACTIVE, FCTL_UPDATEPANEL, 1, nullptr);
-            g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
-        }
         return 1;
     }
     if (!panel->sites && key.wVirtualKeyCode == VK_F3 && !shift && !ctrl && !alt) {

@@ -150,7 +150,8 @@ std::string VaultToJson(const VaultData& data) {
         const auto& item = data.passwords[i];
         json += "    {\"id\":\"" + Escape(item.id) + "\",\"name\":\"" + Escape(item.name) +
                 "\",\"user\":\"" + Escape(item.user) + "\",\"secret\":\"" + Escape(item.secret) +
-                "\",\"host\":\"" + Escape(item.host) + "\",\"note\":\"" + Escape(item.note) + "\"}";
+                "\",\"host\":\"" + Escape(item.host) + "\",\"note\":\"" + Escape(item.note) +
+                "\",\"revision\":\"" + Escape(std::to_wstring(item.revision)) + "\"}";
         json += (i + 1 < data.passwords.size()) ? ",\n" : "\n";
     }
     json += "  ],\n  \"keys\": [\n";
@@ -158,7 +159,8 @@ std::string VaultToJson(const VaultData& data) {
         const auto& item = data.keys[i];
         json += "    {\"id\":\"" + Escape(item.id) + "\",\"name\":\"" + Escape(item.name) +
                 "\",\"type\":\"" + Escape(item.type) + "\",\"comment\":\"" + Escape(item.comment) +
-                "\",\"private\":\"" + Escape(item.privateKey) + "\",\"public\":\"" + Escape(item.publicKey) + "\"}";
+                "\",\"private\":\"" + Escape(item.privateKey) + "\",\"public\":\"" + Escape(item.publicKey) +
+                "\",\"revision\":\"" + Escape(std::to_wstring(item.revision)) + "\"}";
         json += (i + 1 < data.keys.size()) ? ",\n" : "\n";
     }
     json += "  ]\n}\n";
@@ -195,6 +197,7 @@ bool JsonToVault(const std::string& json, VaultData& data, std::wstring& error) 
                     item.secret = FieldOr(fields, "secret");
                     item.host = FieldOr(fields, "host");
                     item.note = FieldOr(fields, "note");
+                    item.revision = _wtoi(FieldOr(fields, "revision").c_str());
                     if (!item.name.empty()) data.passwords.push_back(std::move(item));
                     return true;
                 })) {
@@ -212,6 +215,7 @@ bool JsonToVault(const std::string& json, VaultData& data, std::wstring& error) 
                     item.comment = FieldOr(fields, "comment");
                     item.privateKey = FieldOr(fields, "private");
                     item.publicKey = FieldOr(fields, "public");
+                    item.revision = _wtoi(FieldOr(fields, "revision").c_str());
                     if (!item.name.empty()) data.keys.push_back(std::move(item));
                     return true;
                 })) {

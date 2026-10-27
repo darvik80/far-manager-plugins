@@ -428,6 +428,21 @@ struct ProcessPanelInputInfo {
     void* Instance;
 };
 
+enum ADVANCED_CONTROL_COMMANDS {
+    ACTL_SYNCHRO = 20,
+};
+
+enum SYNCHRO_EVENTS {
+    SE_COMMONSYNCHRO = 0,
+};
+
+struct ProcessSynchroEventInfo {
+    size_t StructSize;
+    intptr_t Event;
+    void* Param;
+    void* Instance;
+};
+
 struct ProcessConsoleInputInfo {
     size_t StructSize;
     uint64_t Flags;
@@ -463,8 +478,8 @@ struct FarMenuItem {
 typedef intptr_t (WINAPI *FARAPIMENU)(
     const GUID& PluginId,
     const GUID& Id,
-    int X, int Y,
-    int MaxHeight,
+    intptr_t X, intptr_t Y,
+    intptr_t MaxHeight,
     uint64_t Flags,
     const wchar_t* Title,
     const wchar_t* Bottom,
@@ -485,7 +500,7 @@ typedef int (WINAPI *FARAPIMESSAGE)(
 
 typedef const wchar_t* (WINAPI *FARAPIGETMSG)(
     const GUID& PluginId,
-    int Msg);
+    intptr_t Msg);
 
 typedef intptr_t (WINAPI *FARAPIPANELCONTROL)(
     HANDLE hPanel,
@@ -503,21 +518,21 @@ typedef void (WINAPI *FARAPIFREEPLUGINDIRLIST)(const GUID&, void*);
 typedef HANDLE (WINAPI *FARAPIVIEWER)(
     const wchar_t* Name,
     const wchar_t* Title,
-    int X1, int Y1, int X2, int Y2,
+    intptr_t X1, intptr_t Y1, intptr_t X2, intptr_t Y2,
     uint64_t Flags,
-    unsigned int CodePage);
+    uintptr_t CodePage);
 
 typedef HANDLE (WINAPI *FARAPIEDITOR)(
     const wchar_t* Name,
     const wchar_t* Title,
-    int X1, int Y1, int X2, int Y2,
+    intptr_t X1, intptr_t Y1, intptr_t X2, intptr_t Y2,
     uint64_t Flags,
-    int StartLine,
-    int StartChar,
-    unsigned int CodePage);
+    intptr_t StartLine,
+    intptr_t StartChar,
+    uintptr_t CodePage);
 
 typedef void (WINAPI *FARAPITEXT)(
-    int X, int Y,
+    intptr_t X, intptr_t Y,
     const FarColor* Color,
     const wchar_t* Str);
 
@@ -554,11 +569,14 @@ typedef int (WINAPI *FARAPICOLORDIALOG)(
     const GUID& Id,
     FarColor* Color);
 
+// Far's DialogInit takes intptr_t coordinates. `int` on x64 leaves the high
+// 32 bits of stack slots undefined, so Far sees a huge width/height and
+// DialogInit returns INVALID_HANDLE_VALUE (often "works on the second try").
 typedef HANDLE (WINAPI *FARAPIDIALOGINIT)(
     const GUID& PluginId,
     const GUID& Id,
-    int X1, int Y1,
-    int X2, int Y2,
+    intptr_t X1, intptr_t Y1,
+    intptr_t X2, intptr_t Y2,
     const wchar_t* HelpTopic,
     const FarDialogItem* Item,
     size_t ItemsNumber,
@@ -813,6 +831,7 @@ intptr_t WINAPI ConfigureW(const struct ConfigureInfo* Info);
 void     WINAPI ExitFARW(const struct ExitInfo* Info);
 intptr_t WINAPI ProcessPanelInputW(const struct ProcessPanelInputInfo* Info);
 intptr_t WINAPI ProcessConsoleInputW(struct ProcessConsoleInputInfo* Info);
+intptr_t WINAPI ProcessSynchroEventW(const struct ProcessSynchroEventInfo* Info);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,7 @@
 #include "vault.hpp"
 #include "json.hpp"
 #include "text.hpp"
+#include "nk_secure.hpp"
 
 #include <windows.h>
 #include <wincrypt.h>
@@ -329,24 +330,12 @@ bool NameTaken(const VaultData& data, bool keys, const std::wstring& name, const
 }
 
 std::wstring WriteTempKey(const KeyRecord& key, std::wstring& error) {
-    wchar_t temp[MAX_PATH]{};
-    if (!GetTempPathW(MAX_PATH, temp)) {
-        error = L"Нет временного каталога.";
-        return {};
-    }
-    std::wstring dir = temp;
-    if (dir.empty() || dir.back() != L'\\') dir += L'\\';
-    dir += L"FarVault";
-    CreateDirectoryW(dir.c_str(), nullptr);
-    wchar_t path[MAX_PATH]{};
-    if (!GetTempFileNameW(dir.c_str(), L"key", 0, path)) {
-        error = L"Не удалось создать временный ключ.";
-        return {};
-    }
+    const std::wstring path = NkSecureTempPath(L"FarVault", L"key", L".pem", error);
+    if (path.empty()) return {};
     const std::string pem = Utf8(key.privateKey);
-    if (!WriteAll(path, pem.data(), pem.size())) {
+    if (!NkWriteSecureFile(path, pem.data(), pem.size())) {
         error = L"Не удалось записать временный ключ.";
-        DeleteFileW(path);
+        DeleteFileW(path.c_str());
         return {};
     }
     return path;

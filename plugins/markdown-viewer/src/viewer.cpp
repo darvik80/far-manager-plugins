@@ -54,6 +54,9 @@ struct ViewerState {
 
 static ViewerState* g_viewerState = nullptr;
 
+constexpr int kMaxDlgW = 400;
+constexpr int kMaxDlgH = 200;
+
 static int g_theme = 0;
 
 static const Theme& Th() {
@@ -574,9 +577,10 @@ static void EnsureVisuals(ViewerState* state) {
 
 static void RenderBuffer(ViewerState* state) {
     if (state->viewWidth <= 0 || state->viewHeight <= 0) return;
-    EnsureVisuals(state);
     const int width = state->viewWidth;
     const int height = state->viewHeight;
+    if (static_cast<size_t>(width) * static_cast<size_t>(height) > state->buffer.size()) return;
+    EnsureVisuals(state);
     const FarColor fill = Paint(Th().fg, Th().bg);
 
     for (int row = 0; row < height; ++row) {
@@ -709,10 +713,62 @@ static void FindText(ViewerState* state, int direction, bool includeCurrent, HAN
     if (hDlg) state->info->SendDlgMessage(hDlg, DM_REDRAW, 0, nullptr);
 }
 
+static bool ConsoleDialogSize(const PluginStartupInfo* info, int& dlgW, int& dlgH, SMALL_RECT& rect) {
+    rect = {};
+    rect.Right = 79;
+    rect.Bottom = 24;
+    if (info && info->AdvControl)
+        info->AdvControl(MainGuid, 24, 0, &rect);
+    dlgW = rect.Right - rect.Left + 1;
+    dlgH = rect.Bottom - rect.Top + 1;
+    if (dlgW < 20) dlgW = 20;
+    if (dlgH < 8) dlgH = 8;
+    if (dlgW > kMaxDlgW) dlgW = kMaxDlgW;
+    if (dlgH > kMaxDlgH) dlgH = kMaxDlgH;
+    return true;
+}
+
+static void PlaceViewer(ViewerState* state, HANDLE hDlg, int dlgW, int dlgH, const SMALL_RECT& rect) {
+    COORD size{ static_cast<SHORT>(dlgW), static_cast<SHORT>(dlgH) };
+    state->info->SendDlgMessage(hDlg, DM_RESIZEDIALOG, 0, &size);
+    COORD pos{ rect.Left, rect.Top };
+    state->info->SendDlgMessage(hDlg, DM_MOVEDIALOG, 0, &pos);
+    SMALL_RECT box{ 0, 0, static_cast<SHORT>(dlgW - 1), static_cast<SHORT>(dlgH - 1) };
+    state->info->SendDlgMessage(hDlg, DM_SETITEMPOSITION, 0, &box);
+    SMALL_RECT view{ 1, 1, static_cast<SHORT>(dlgW - 2), static_cast<SHORT>(dlgH - 3) };
+    state->info->SendDlgMessage(hDlg, DM_SETITEMPOSITION, 1, &view);
+    SMALL_RECT status{ 2, static_cast<SHORT>(dlgH - 2), static_cast<SHORT>(dlgW - 3), static_cast<SHORT>(dlgH - 2) };
+    state->info->SendDlgMessage(hDlg, DM_SETITEMPOSITION, 2, &status);
+}
+
+static void FitConsole(ViewerState* state, HANDLE hDlg) {
+    SMALL_RECT rect{};
+    int dlgW = 0;
+    int dlgH = 0;
+    ConsoleDialogSize(state->info, dlgW, dlgH, rect);
+    const int viewW = dlgW - 2;
+    const int viewH = dlgH - 3;
+    if (viewW < 1 || viewH < 1) return;
+    const bool same = viewW == state->viewWidth && viewH == state->viewHeight;
+    state->viewWidth = viewW;
+    state->viewHeight = viewH;
+    if (!same) state->builtWidth = -1;
+    RenderBuffer(state);
+    UpdateStatus(state, hDlg);
+    state->info->SendDlgMessage(hDlg, DM_ENABLEREDRAW, 0, nullptr);
+    PlaceViewer(state, hDlg, dlgW, dlgH, rect);
+    state->info->SendDlgMessage(hDlg, DM_ENABLEREDRAW, 1, nullptr);
+    state->info->SendDlgMessage(hDlg, DM_REDRAW, 0, nullptr);
+}
+
 static intptr_t WINAPI ViewerDlgProc(HANDLE hDlg, intptr_t Msg, intptr_t Param1, void* Param2) {
     ViewerState* state = g_viewerState;
     if (!state || !state->info || !state->info->DefDlgProc)
         return 0;
+    if (Msg == DN_RESIZECONSOLE) {
+        FitConsole(state, hDlg);
+        return 1;
+    }
 
     if (Msg == DN_CONTROLINPUT && state->lines) {
         auto* rec = reinterpret_cast<const INPUT_RECORD*>(Param2);
@@ -873,6 +929,8 @@ void ShowMarkdownViewer(
     int dlgH = farRect.Bottom - farRect.Top + 1;
     if (dlgW < 20) dlgW = 20;
     if (dlgH < 8) dlgH = 8;
+    if (dlgW > kMaxDlgW) dlgW = kMaxDlgW;
+    if (dlgH > kMaxDlgH) dlgH = kMaxDlgH;
 
     const int viewWidth = dlgW - 2;
     const int viewHeight = dlgH - 3;
@@ -886,7 +944,7 @@ void ShowMarkdownViewer(
     state.viewWidth = viewWidth;
     state.viewHeight = viewHeight;
     state.rawMode = false;
-    state.buffer.assign(static_cast<size_t>(viewWidth) * viewHeight, FAR_CHAR_INFO{});
+    state.buffer.assign(static_cast<size_t>(kMaxDlgW) * kMaxDlgH, FAR_CHAR_INFO{});
     UpdateStatus(&state, nullptr);
     RenderBuffer(&state);
 

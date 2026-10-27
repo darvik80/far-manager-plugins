@@ -81,7 +81,8 @@ IMAP-клиент для просмотра электронной почты п
 - `F2` или `Shift+Enter` — обычный SSH-терминал в отдельном окне (`tsh ssh` для Teleport, `ssh.exe` для остальных). Enter по-прежнему открывает SFTP
 - Если установлен `tsh`: `F6` — `tsh login --mfa-mode=otp` в отдельном окне (пароль и OTP, либо браузер/SSO). Ноды из `tsh ls` появляются в списке, вход идёт через `tsh proxy ssh`
 - В каталоге: `F5` — копировать, `F6` — переименовать, `F7` — папка, `F8` — удалить
-- Поля `Ключ vault` / `Пароль vault` — имена записей Secret Vault. Открытый пароль из старого `sessions.ini` при наличии хранилища переносится туда
+- Поля `Ключ vault` / `Пароль vault` — имена записей Secret Vault. Если локальный vault молчит, SSH берёт пароль/ключ из NoteKeeper vault (тот же URL+PAT). Если поле пустое — ищет запись по **точному** хосту (не подстроке)
+- Открытый пароль из старого `sessions.ini` при наличии хранилища переносится туда
 
 ---
 
@@ -95,15 +96,37 @@ IMAP-клиент для просмотра электронной почты п
 - Создание ключей ed25519 и RSA 3072 через `ssh-keygen`, импорт OpenSSH-файлов
 - Копирование секрета в буфер (`F5` / `Ctrl+C`), очистка через 30 секунд
 - Экспорт/импорт файла с паролем (AES-256-GCM)
-- SSH берёт пароль и ключ по имени записи
+- Синк с NoteKeeper: HTTPS, PAT в DPAPI (`NoteKeeper\settings.ini`), scope `vault`
+- SSH берёт пароль и ключ по имени записи через `Plugin.SyncCall` (только SSH Client); если плагин не ответил — NoteKeeper REST `/api/v1/vault`
 
 **Использование:**
 - `Alt+F1` / `Alt+F2` → Secret Vault. Если цифра ещё не назначена, плагин ставит `7`
 - `F11` → Secret Vault
+- Настройки: URL `https://…` и PAT. Связь проверяется при сохранении
 - На корне и в каталоге: `F7` или `Shift+F4` — новая запись. На корне F7 создаёт пароль или ключ в зависимости от строки под курсором
 - В каталоге: `F4` — изменить, `F5` — секрет в буфер, `F3` — логин или публичный ключ, `F8` — удалить
 - Ключи с диска: встань на `id_ed25519` / `id_rsa` в другой панели и `F5` в `Ключи` (`.pub` не нужен)
 - `Alt+F5` — экспорт, `Alt+F6` — импорт
+- `Shift+Alt+F9` — синк с NoteKeeper (`Alt+F9` остаётся размер окна FAR). Пустой локальный vault подтягивается при открытии; если записи уже есть, первый merge — только Shift+Alt+F9. Более новая локальная revision не затирается
+
+---
+
+### NoteKeeper
+
+Панель notes и todos с сервера NoteKeeper.
+
+**Возможности:**
+- Каталоги `Notes` и `Todos`
+- Редактор FAR (`F4`) пишет Markdown обратно через REST
+- Todo: `F5` / Space — `toggle-complete`
+- PAT: Windows DPAPI в `%APPDATA%\Far Manager\NoteKeeper\settings.ini` (URL можно дублировать в Secret Vault `sync.ini`, токен туда больше не пишется)
+
+**Использование:**
+- `Alt+F1` / `Alt+F2` → NoteKeeper. Если цифра ещё не назначена, плагин ставит `8`
+- `F11` → NoteKeeper
+- Командная строка FAR: `nk:`
+- Настройки плагина: HTTPS URL (`https://note.example:8443`) и PAT со scopes `notes`, `todos` (SSH vault — ещё `vault`). `http://` только для localhost
+- `F3` — просмотр, `F4` — правка, `F7` / `Shift+F4` — создать, `F8` — удалить, `Alt+F9` — обновить
 
 ---
 
@@ -212,7 +235,10 @@ far-manager-plugins/
 │   ├── pretty-viewer/     # JSON, YAML, XML
 │   ├── html-viewer/       # HTML просмотрщик (LuaFAR + Lua)
 │   ├── secret-vault/      # пароли и OpenSSH-ключи
+│   ├── note-keeper/       # notes/todos + PAT
 │   └── ssh-client/        # SFTP панель
+├── common/
+│   └── notekeeper/        # REST/MCP клиент, DPAPI PAT, HTTPS
 ├── third_party/
 │   └── luafar/            # общий host Lua-плагинов (luaplug)
 ├── cmake/
@@ -226,6 +252,17 @@ far-manager-plugins/
 ```
 
 ---
+
+## Безопасность
+
+- **PAT** шифруется DPAPI текущей учётки Windows. Старый plaintext в `settings.ini` / `sync.ini` при первом запуске переносится и стирается из `sync.ini`.
+- **HTTPS обязателен** для NoteKeeper/vault. Исключение: `http://127.0.0.1`, `localhost`, `::1`.
+- **SSH host match** — точное имя хоста (схема, порт и путь отбрасываются). Подстрока `evil.com` ⊂ `notevil.com` больше не срабатывает.
+- **Plugin.SyncCall** Secret Vault (`lookup` / `list` / `store`) принимает GUID только SSH Client.
+- **Временные ключи и F3-заметки** пишутся в `%TEMP%\FarVault` / `%TEMP%\FarNoteKeeper` с DACL «только текущий пользователь» и удаляются при закрытии панели / выходе из FAR.
+- **Синк vault**: сервер не затирает локальную запись с такой же или большей `revision`. Первый pull в уже непустой локальный vault — `Shift+Alt+F9`.
+
+IMAP-пароли Email Viewer по-прежнему в plaintext `%APPDATA%\Far Manager\EmailViewer.ini` — это отдельный плагин.
 
 ## 🛠️ Разработка
 

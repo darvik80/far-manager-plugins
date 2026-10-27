@@ -17,3 +17,4 @@ EXPORTS
     DeleteFilesW        @15
     MakeDirectoryW      @16
     ProcessPanelInputW  @17
+    ProcessSynchroEventW @18

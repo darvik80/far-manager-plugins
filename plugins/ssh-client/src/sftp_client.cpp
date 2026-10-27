@@ -243,7 +243,7 @@ bool OpenSshTerminal(const StoredServer& server, std::wstring& error) {
                 inner += L" -J " + QuoteArg(server.proxy);
             std::wstring key = server.keyFile;
             if (key.empty() && !server.vaultKey.empty()) {
-                key = VaultCall(L"lookup", L"key", server.vaultKey);
+                key = VaultLookupKeyFile(server.vaultKey);
                 cleanup = key;
             }
             if (key.empty()) {
@@ -514,9 +514,9 @@ bool SftpConnection::Authenticate(const StoredServer& server, std::wstring& erro
     auto* session = static_cast<LIBSSH2_SESSION*>(session_);
     const std::string user = Utf8(server.user);
     if (!server.vaultKey.empty()) {
-        const std::wstring temp = VaultCall(L"lookup", L"key", server.vaultKey);
+        const std::wstring temp = VaultLookupKeyFile(server.vaultKey);
         if (temp.empty()) {
-            error = L"Ключ не найден в Secret Vault: " + server.vaultKey;
+            error = L"Ключ не найден в Secret Vault / NoteKeeper: " + server.vaultKey;
             return false;
         }
         if (TryKeyFile(session, user, temp, {}, true)) return true;
@@ -538,7 +538,9 @@ bool SftpConnection::Authenticate(const StoredServer& server, std::wstring& erro
     }
     std::wstring secret = server.password;
     if (secret.empty() && !server.vaultPassword.empty())
-        secret = VaultCall(L"lookup", L"password", server.vaultPassword);
+        secret = VaultLookupPassword(server.vaultPassword);
+    if (secret.empty())
+        secret = VaultLookupPasswordForHost(server.host, server.user);
     std::string password = Utf8(secret);
     if (password.empty()) {
         const std::wstring typed = AskText(L"Password", server.host.c_str(), true);

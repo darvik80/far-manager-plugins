@@ -1,5 +1,22 @@
 # История изменений
 
+## 1.3.0
+
+### Новое
+- **NoteKeeper** — панель notes/todos: URL+PAT при первом открытии, MCP (`/mcp`) если REST 403, список не дергается на каждый refresh
+- **SSH Client**: пароль и ключ из NoteKeeper vault, если Secret Vault не ответил; подбор пароля по хосту
+
+### Безопасность
+- PAT хранится через Windows DPAPI в `NoteKeeper\settings.ini`, дубль в `sync.ini` убран
+- К NoteKeeper только HTTPS (`http://` — localhost)
+- SSH подбирает пароль vault по точному хосту, не по подстроке
+- `Plugin.SyncCall` lookup/store принимает только SSH Client
+- Временные PEM и F3-файлы с ACL текущей учётки, хвосты чистятся при выходе
+- Pull с NoteKeeper не перезаписывает более новую локальную запись; в непустой vault без прошлого синка — только по Shift+Alt+F9
+- **Secret Vault**: синк с NoteKeeper на `Shift+Alt+F9`, чтобы не перехватывать `Alt+F9` FAR
+
+---
+
 ## 1.2.0 (2026-10-26)
 
 ### Новое

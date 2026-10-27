@@ -14,9 +14,11 @@ set(FAR_SDK_DIR ${CMAKE_SOURCE_DIR}/sdk)
 
 include(cmake/LuaFarPlugin.cmake)
 
+add_subdirectory(common/notekeeper)
 add_subdirectory(plugins/markdown-viewer)
 add_subdirectory(plugins/email-viewer)
 add_subdirectory(plugins/ssh-client)
 add_subdirectory(plugins/secret-vault)
 add_subdirectory(plugins/pretty-viewer)
 add_subdirectory(plugins/html-viewer)
+add_subdirectory(plugins/note-keeper)

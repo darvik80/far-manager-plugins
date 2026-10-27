@@ -10,6 +10,7 @@ add_library(${PLUGIN_NAME} SHARED
     src/json.cpp
     src/keys.cpp
     src/clipboard.cpp
+    src/sync.cpp
     exports.def
 )
 
@@ -27,7 +28,7 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE
 )
 
 find_package(OpenSSL REQUIRED)
-target_link_libraries(${PLUGIN_NAME} PRIVATE OpenSSL::Crypto crypt32 ole32)
+target_link_libraries(${PLUGIN_NAME} PRIVATE OpenSSL::Crypto crypt32 ole32 winhttp nk_client)
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
     OUTPUT_NAME ${PLUGIN_NAME}

@@ -16,3 +16,4 @@ EXPORTS
     ProcessPanelInputW  @14
     PutFilesW           @15
     GetFilesW           @16
+    ProcessSynchroEventW @17

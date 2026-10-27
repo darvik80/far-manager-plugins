@@ -17,5 +17,6 @@ bool EditPassword(PasswordRecord& item, bool create);
 bool EditKeyMeta(KeyRecord& item, bool create);
 bool CreateKey(KeyRecord& item, std::wstring& kind);
 std::wstring AskFile(const wchar_t* title, bool save);
+bool EditSyncSettings(std::wstring& baseUrl, std::wstring& token);
 
 #endif

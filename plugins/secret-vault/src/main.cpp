@@ -4,7 +4,9 @@
 #include "panel.hpp"
 #include "text.hpp"
 #include "ui.hpp"
+#include "sync.hpp"
 #include "vault.hpp"
+#include "nk_secure.hpp"
 
 #include <string>
 
@@ -66,15 +68,21 @@ HANDLE ReplyString(const std::wstring& text) {
     return &g_call;
 }
 
+bool CallerAllowed(const std::wstring& guid) {
+    const std::wstring id = Lower(guid);
+    return id == L"c3a91e47-5b28-4d6f-8e14-2f7a6c9d0b51";
+}
+
 HANDLE HandleMacro(const OpenInfo* info) {
     const auto* macro = info && info->Data ? reinterpret_cast<const OpenMacroInfo*>(info->Data) : nullptr;
-    const std::wstring verb = Lower(MacroString(macro, 0));
+    if (!CallerAllowed(MacroString(macro, 0))) return ReplyString(L"");
+    const std::wstring verb = Lower(MacroString(macro, 1));
     VaultData data;
     std::wstring error;
     if (!LoadVault(data, error)) return ReplyString(L"");
 
     if (verb == L"list") {
-        const std::wstring kind = Lower(MacroString(macro, 1));
+        const std::wstring kind = Lower(MacroString(macro, 2));
         std::wstring names;
         if (kind == L"keys") {
             for (const auto& item : data.keys) {
@@ -90,8 +98,8 @@ HANDLE HandleMacro(const OpenInfo* info) {
         return ReplyString(names);
     }
     if (verb == L"lookup") {
-        const std::wstring kind = Lower(MacroString(macro, 1));
-        const std::wstring name = MacroString(macro, 2);
+        const std::wstring kind = Lower(MacroString(macro, 2));
+        const std::wstring name = MacroString(macro, 3);
         if (kind == L"key") {
             const auto* item = FindKey(data, name);
             if (!item) return ReplyString(L"");
@@ -102,9 +110,9 @@ HANDLE HandleMacro(const OpenInfo* info) {
         return ReplyString(item ? item->secret : L"");
     }
     if (verb == L"store") {
-        const std::wstring kind = Lower(MacroString(macro, 1));
-        const std::wstring name = MacroString(macro, 2);
-        const std::wstring secret = MacroString(macro, 3);
+        const std::wstring kind = Lower(MacroString(macro, 2));
+        const std::wstring name = MacroString(macro, 3);
+        const std::wstring secret = MacroString(macro, 4);
         if (name.empty()) return ReplyString(L"");
         if (kind == L"key") {
             KeyRecord* item = FindKey(data, name);
@@ -152,7 +160,7 @@ void WINAPI GetGlobalInfoW(GlobalInfo* info) {
     info->MinFarVersion.Build = FARMANAGERVERSION_BUILD;
     info->MinFarVersion.Stage = FARMANAGERVERSION_STAGE;
     info->Version.Major = 1;
-    info->Version.Minor = 0;
+    info->Version.Minor = 1;
     info->Version.Revision = 0;
     info->Version.Build = 1;
     info->Version.Stage = VS_RELEASE;
@@ -177,7 +185,11 @@ void WINAPI GetPluginInfoW(PluginInfo* info) {
     info->DiskMenu.Guids = &menuGuid;
     info->DiskMenu.Strings = menuStrings;
     info->DiskMenu.Count = 1;
-    info->PluginConfig.Count = 0;
+    static const GUID configGuid = MenuGuid;
+    static const wchar_t* configStrings[] = { L"Secret Vault" };
+    info->PluginConfig.Guids = &configGuid;
+    info->PluginConfig.Strings = configStrings;
+    info->PluginConfig.Count = 1;
     info->CommandPrefix = L"secret";
 }
 
@@ -188,11 +200,18 @@ HANDLE WINAPI OpenW(const OpenInfo* info) {
 }
 
 intptr_t WINAPI ConfigureW(const ConfigureInfo*) {
+    SyncSettings settings;
+    LoadSyncSettings(settings);
+    if (!EditSyncSettings(settings.baseUrl, settings.token)) return 1;
+    if (!SaveSyncSettings(settings)) {
+        Say(L"Не удалось сохранить PAT (DPAPI).");
+        return 1;
+    }
     const std::wstring line = L"Файл: " + VaultPath();
     const wchar_t* items[] = {
         L"Secret Vault",
         L"",
-        L"Каталоги Пароли и Ключи.",
+        L"Каталоги Пароли и Ключи. Shift+Alt+F9 — синк с NoteKeeper (HTTPS, PAT: vault).",
         L"F4 изменить, F7 / Shift+F4 создать, F5 в буфер, F8 удалить.",
         L"Alt+F5 экспорт, Alt+F6 импорт.",
         line.c_str(),
@@ -202,6 +221,8 @@ intptr_t WINAPI ConfigureW(const ConfigureInfo*) {
 }
 
 void WINAPI ExitFARW(const ExitInfo*) {
+    NkWipeTempPrefix(L"FarVault", L"key");
+    NkWipeTempPrefix(L"FarVault", L"svk");
 }
 
 }

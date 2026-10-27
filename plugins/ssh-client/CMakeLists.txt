@@ -48,7 +48,7 @@ target_compile_definitions(${PLUGIN_NAME} PRIVATE
 target_compile_options(${PLUGIN_NAME} PRIVATE /DLIBSSH2_API=)
 
 find_package(OpenSSL REQUIRED)
-target_link_libraries(${PLUGIN_NAME} PRIVATE libssh2_static OpenSSL::Crypto ws2_32)
+target_link_libraries(${PLUGIN_NAME} PRIVATE libssh2_static OpenSSL::Crypto ws2_32 nk_client)
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
     OUTPUT_NAME ${PLUGIN_NAME}

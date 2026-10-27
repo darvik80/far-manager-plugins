@@ -14,7 +14,7 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-for %%p in (EmailViewer HtmlViewer MarkdownViewer PrettyViewer SecretVault SshClient) do (
+for %%p in (EmailViewer HtmlViewer MarkdownViewer NoteKeeper PrettyViewer SecretVault SshClient) do (
     set "PLUGIN_DIR=%BUILD_DIR%\%%p\Release"
     set "DLL_FILE=!PLUGIN_DIR!\%%p.dll"
     set "DEST_DIR=%INSTALL_DIR%\%%p"

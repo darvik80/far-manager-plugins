@@ -4,6 +4,7 @@
 #include "keys.hpp"
 #include "text.hpp"
 #include "ui.hpp"
+#include "sync.hpp"
 #include "vault.hpp"
 
 #include <algorithm>
@@ -166,13 +167,42 @@ struct VaultPanel {
         return true;
     }
 
+    bool PushRemote() {
+        SyncSettings settings;
+        LoadSyncSettings(settings);
+        if (!SyncConfigured(settings)) return true;
+        std::wstring error;
+        if (PushVault(data, settings, false, error)) return true;
+        if (error.find(L"Конфликт") != std::wstring::npos && AskYes(error.c_str())) {
+            error.clear();
+            if (PushVault(data, settings, true, error)) return true;
+        }
+        if (!error.empty()) Say(error.c_str());
+        return false;
+    }
+
+    bool PullRemote() {
+        SyncSettings settings;
+        LoadSyncSettings(settings);
+        if (!SyncConfigured(settings)) return true;
+        const bool first = settings.lastSync.empty();
+        const bool hasLocal = !data.passwords.empty() || !data.keys.empty();
+        if (first && hasLocal) return true;
+        std::wstring error;
+        if (!PullVault(data, settings, error)) {
+            if (!error.empty()) Say(error.c_str());
+            return false;
+        }
+        return SaveVault(data, error);
+    }
+
     bool Persist() {
         std::wstring error;
         if (!SaveVault(data, error)) {
             if (!error.empty()) Say(error.c_str());
             return false;
         }
-        return true;
+        return PushRemote();
     }
 
     void GoRoot() {
@@ -253,7 +283,10 @@ bool AddPassword(VaultPanel* panel) {
 
 bool EditPasswordAt(VaultPanel* panel, const std::wstring& name) {
     auto* item = FindPassword(panel->data, name);
-    if (!item) return false;
+    if (!item) {
+        Say(L"Пароль не найден.");
+        return false;
+    }
     PasswordRecord edited = *item;
     if (!EditPassword(edited, false)) return false;
     if (NameTaken(panel->data, false, edited.name, edited.id)) {
@@ -423,7 +456,10 @@ bool AddRecord(VaultPanel* panel) {
 
 bool EditKeyAt(VaultPanel* panel, const std::wstring& name) {
     auto* item = FindKey(panel->data, name);
-    if (!item) return false;
+    if (!item) {
+        Say(L"Ключ не найден.");
+        return false;
+    }
     KeyRecord edited = *item;
     if (!EditKeyMeta(edited, false)) return false;
     if (NameTaken(panel->data, true, edited.name, edited.id)) {
@@ -501,6 +537,34 @@ void ExportCurrent(VaultPanel* panel) {
     if (!ExportVault(panel->data, path, pass, error) && !error.empty()) Say(error.c_str());
 }
 
+const intptr_t kHotkeyCreate = 1;
+const intptr_t kHotkeyEdit = 2;
+HANDLE g_hotkeyPanel = nullptr;
+
+void RunVaultHotkey(intptr_t action) {
+    auto* panel = PanelOf(g_hotkeyPanel);
+    if (!panel) return;
+    if (action == kHotkeyCreate) {
+        AddRecord(panel);
+    } else if (panel->place == Place::Root) {
+        AddRecord(panel);
+    } else {
+        const std::wstring name = CurrentName();
+        if (name.empty() || name == L".." || IsHintName(name)) AddRecord(panel);
+        else if (panel->place == Place::Passwords) EditPasswordAt(panel, name);
+        else EditKeyAt(panel, name);
+    }
+    Redraw();
+}
+
+bool PostVaultHotkey(HANDLE hPanel, intptr_t action) {
+    g_hotkeyPanel = hPanel;
+    if (g_info.AdvControl && g_info.AdvControl(MainGuid, ACTL_SYNCHRO, 0, reinterpret_cast<void*>(action)))
+        return true;
+    RunVaultHotkey(action);
+    return true;
+}
+
 void ImportCurrent(VaultPanel* panel) {
     const std::wstring path = AskFile(L"Импорт хранилища", false);
     if (path.empty()) return;
@@ -522,6 +586,7 @@ HANDLE OpenVaultPanel() {
         delete panel;
         return nullptr;
     }
+    panel->PullRemote();
     return panel;
 }
 
@@ -553,6 +618,7 @@ void WINAPI GetOpenPanelInfoW(OpenPanelInfo* info) {
         {{VK_F4, SHIFT_PRESSED}, L"Новый", L"Новая запись"},
         {{VK_F5, LEFT_ALT_PRESSED}, L"Эксп", L"Экспорт"},
         {{VK_F6, LEFT_ALT_PRESSED}, L"Имп", L"Импорт"},
+        {{VK_F9, SHIFT_PRESSED | LEFT_ALT_PRESSED}, L"Синк", L"NoteKeeper"},
         {{VK_F5, 0}, L"", L""},
         {{VK_F7, 0}, L"Новый", L"Новая запись"},
         {{VK_F8, 0}, L"", L""},
@@ -566,6 +632,7 @@ void WINAPI GetOpenPanelInfoW(OpenPanelInfo* info) {
         {{VK_F8, 0}, L"Удал", L"Удалить"},
         {{VK_F5, LEFT_ALT_PRESSED}, L"Эксп", L"Экспорт"},
         {{VK_F6, LEFT_ALT_PRESSED}, L"Имп", L"Импорт"},
+        {{VK_F9, SHIFT_PRESSED | LEFT_ALT_PRESSED}, L"Синк", L"NoteKeeper"},
     };
     static KeyTitles rootBar{ std::size(rootKeys), rootKeys };
     static KeyTitles itemBar{ std::size(itemKeys), itemKeys };
@@ -588,7 +655,6 @@ void WINAPI GetOpenPanelInfoW(OpenPanelInfo* info) {
 intptr_t WINAPI GetFindDataW(GetFindDataInfo* info) {
     auto* panel = PanelOf(info ? info->hPanel : nullptr);
     if (!info || !panel) return 0;
-    panel->Reload();
     std::vector<Row> rows;
     std::vector<PluginPanelItem> items;
     if (panel->place == Place::Root) {
@@ -746,14 +812,31 @@ intptr_t WINAPI DeleteFilesW(const DeleteFilesInfo* info) {
     return changed ? 1 : 0;
 }
 
+intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* info) {
+    if (!info || info->Event != SE_COMMONSYNCHRO) return 0;
+    RunVaultHotkey(reinterpret_cast<intptr_t>(info->Param));
+    return 0;
+}
+
 intptr_t WINAPI ProcessPanelInputW(const ProcessPanelInputInfo* info) {
-    if (!info || info->Rec.EventType != KEY_EVENT || !info->Rec.Event.KeyEvent.bKeyDown) return 0;
+    if (!info || (info->Rec.EventType & 0x7FFF) != KEY_EVENT || !info->Rec.Event.KeyEvent.bKeyDown) return 0;
     auto* panel = PanelOf(info->hPanel);
     if (!panel) return 0;
     const KEY_EVENT_RECORD& key = info->Rec.Event.KeyEvent;
-    const bool shift = (key.dwControlKeyState & SHIFT_PRESSED) != 0;
+    const bool macro = (info->Rec.EventType & 0x8000) != 0;
+    const bool shift = (key.dwControlKeyState & SHIFT_PRESSED) != 0 ||
+                       (macro && (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
     const bool ctrl = (key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
     const bool alt = (key.dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+
+    if ((key.wVirtualKeyCode == VK_F7 || (key.wVirtualKeyCode == VK_F4 && shift)) && !ctrl && !alt) {
+        PostVaultHotkey(info->hPanel, kHotkeyCreate);
+        return 1;
+    }
+    if (key.wVirtualKeyCode == VK_F4 && !shift && !ctrl && !alt) {
+        PostVaultHotkey(info->hPanel, kHotkeyEdit);
+        return 1;
+    }
 
     if (key.wVirtualKeyCode == VK_F5 && alt && !shift && !ctrl) {
         ExportCurrent(panel);
@@ -763,20 +846,23 @@ intptr_t WINAPI ProcessPanelInputW(const ProcessPanelInputInfo* info) {
         ImportCurrent(panel);
         return 1;
     }
-    if ((key.wVirtualKeyCode == VK_F7 || (key.wVirtualKeyCode == VK_F4 && shift)) && !ctrl && !alt) {
-        AddRecord(panel);
-        Redraw();
-        return 1;
-    }
-    if (key.wVirtualKeyCode == VK_F4 && !shift && !ctrl && !alt) {
-        if (panel->place == Place::Root) {
-            AddRecord(panel);
-        } else {
-            const std::wstring name = CurrentName();
-            if (IsHintName(name)) AddRecord(panel);
-            else if (panel->place == Place::Passwords) EditPasswordAt(panel, name);
-            else EditKeyAt(panel, name);
+    if (key.wVirtualKeyCode == VK_F9 && alt && shift && !ctrl) {
+        std::wstring error;
+        SyncSettings settings;
+        LoadSyncSettings(settings);
+        if (!SyncConfigured(settings)) {
+            Say(L"Сначала укажи URL и PAT в настройках плагина.");
+            return 1;
         }
+        if (!SyncVault(panel->data, settings, false, error)) {
+            if (error.find(L"Конфликт") != std::wstring::npos && AskYes(error.c_str())) {
+                error.clear();
+                if (!SyncVault(panel->data, settings, true, error) && !error.empty()) Say(error.c_str());
+            } else if (!error.empty()) {
+                Say(error.c_str());
+            }
+        }
+        panel->Persist();
         Redraw();
         return 1;
     }

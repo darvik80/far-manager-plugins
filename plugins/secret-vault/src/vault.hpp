@@ -11,6 +11,7 @@ struct PasswordRecord {
     std::wstring secret;
     std::wstring host;
     std::wstring note;
+    int revision = 0;
 };
 
 struct KeyRecord {
@@ -20,6 +21,7 @@ struct KeyRecord {
     std::wstring comment;
     std::wstring privateKey;
     std::wstring publicKey;
+    int revision = 0;
 };
 
 struct VaultData {

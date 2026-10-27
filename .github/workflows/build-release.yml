@@ -49,7 +49,7 @@ jobs:
       shell: pwsh
       run: |
         New-Item -ItemType Directory -Force -Path release-package | Out-Null
-        foreach ($name in @('EmailViewer', 'HtmlViewer', 'MarkdownViewer', 'PrettyViewer', 'SecretVault', 'SshClient')) {
+        foreach ($name in @('EmailViewer', 'HtmlViewer', 'MarkdownViewer', 'NoteKeeper', 'PrettyViewer', 'SecretVault', 'SshClient')) {
           Copy-Item "build\plugins\$name\Release\$name.dll" "release-package\$name.dll"
         }
         foreach ($dir in Get-ChildItem build\plugins -Directory) {
@@ -72,7 +72,7 @@ jobs:
             powershell -Command "Start-Process '%~f0' -Verb RunAs"
             exit /b
         )
-        for %%p in (EmailViewer HtmlViewer MarkdownViewer PrettyViewer SecretVault SshClient) do (
+        for %%p in (EmailViewer HtmlViewer MarkdownViewer NoteKeeper PrettyViewer SecretVault SshClient) do (
             set "DEST_DIR=%INSTALL_DIR%\%%p"
             if not exist "!DEST_DIR!" mkdir "!DEST_DIR!"
             copy /y "%~dp0%%p.dll" "!DEST_DIR!\" >nul

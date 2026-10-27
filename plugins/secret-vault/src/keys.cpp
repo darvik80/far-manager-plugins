@@ -1,5 +1,6 @@
 #include "keys.hpp"
 #include "text.hpp"
+#include "nk_secure.hpp"
 
 #include <windows.h>
 
@@ -95,11 +96,10 @@ bool RunCapture(const std::wstring& command, std::string& out, std::wstring& err
 }
 
 std::wstring TempKeyPath() {
-    wchar_t temp[MAX_PATH]{};
-    GetTempPathW(MAX_PATH, temp);
-    wchar_t path[MAX_PATH]{};
-    GetTempFileNameW(temp, L"svk", 0, path);
-    DeleteFileW(path);
+    std::wstring error;
+    std::wstring path = NkSecureTempPath(L"FarVault", L"svk", nullptr, error);
+    if (path.empty()) return {};
+    DeleteFileW(path.c_str());
     return path;
 }
 

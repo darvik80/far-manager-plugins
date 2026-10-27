@@ -5,7 +5,7 @@
 
 #include <string>
 #include <vector>
-#include <fstream>
+#include <cstdio>
 #include <filesystem>
 #include <algorithm>
 
@@ -13,15 +13,14 @@ static PluginStartupInfo g_info{};
 static FarStandardFunctions* g_fsf = nullptr;
 
 static void ReadFileLines(const std::wstring& path, std::vector<std::wstring>& out) {
-    int needed = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), (int)path.size(), nullptr, 0, nullptr, nullptr);
-    std::string pathStr(needed, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, path.c_str(), (int)path.size(), &pathStr[0], needed, nullptr, nullptr);
-
-    std::ifstream file(pathStr, std::ios::binary);
-    if (!file.is_open()) return;
-
-    std::string raw((std::istreambuf_iterator<char>(file)),
-                     std::istreambuf_iterator<char>());
+    FILE* file = _wfopen(path.c_str(), L"rb");
+    if (!file) return;
+    fseek(file, 0, SEEK_END);
+    const long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    std::string raw(size > 0 ? static_cast<size_t>(size) : 0, '\0');
+    if (size > 0) fread(raw.data(), 1, raw.size(), file);
+    fclose(file);
 
     if (raw.size() >= 3 &&
         (unsigned char)raw[0] == 0xEF &&
@@ -168,6 +167,8 @@ HANDLE WINAPI OpenW(const OpenInfo* Info) {
         auto* cli = reinterpret_cast<const OpenCommandLineInfo*>(Info->Data);
         if (cli && cli->CommandLine)
             path = cli->CommandLine;
+        if (path.size() >= 2 && path.front() == L'"' && path.back() == L'"')
+            path = path.substr(1, path.size() - 2);
     } else {
         path = GetCurrentFilePath();
     }

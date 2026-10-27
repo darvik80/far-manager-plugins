@@ -88,6 +88,9 @@ struct State {
 
 State* g_state = nullptr;
 
+constexpr int kMaxDlgW = 400;
+constexpr int kMaxDlgH = 200;
+
 void Clamp(State* state) {
     const auto& lines = state->Lines();
     if (lines.empty()) {
@@ -106,7 +109,7 @@ void Render(State* state) {
     const int height = state->height;
     if (width <= 0 || height <= 0) return;
     const size_t cells = static_cast<size_t>(width) * static_cast<size_t>(height);
-    if (state->buffer.size() != cells) state->buffer.assign(cells, FAR_CHAR_INFO{});
+    if (cells > state->buffer.size()) return;
     const FarColor fill = Paint(Th().fg, Th().bg);
     for (auto& cell : state->buffer) {
         cell.Char = L' ';
@@ -205,9 +208,59 @@ bool Find(State* state, int direction, HANDLE dlg) {
     return false;
 }
 
+void ConsoleDialogSize(const PluginStartupInfo* info, int& dlgW, int& dlgH, SMALL_RECT& rect) {
+    rect = {};
+    rect.Right = 79;
+    rect.Bottom = 24;
+    if (info && info->AdvControl)
+        info->AdvControl(MainGuid, 24, 0, &rect);
+    dlgW = rect.Right - rect.Left + 1;
+    dlgH = rect.Bottom - rect.Top + 1;
+    if (dlgW < 20) dlgW = 20;
+    if (dlgH < 8) dlgH = 8;
+    if (dlgW > kMaxDlgW) dlgW = kMaxDlgW;
+    if (dlgH > kMaxDlgH) dlgH = kMaxDlgH;
+}
+
+void PlaceViewer(State* state, HANDLE dlg, int dlgW, int dlgH, const SMALL_RECT& rect) {
+    COORD size{ static_cast<SHORT>(dlgW), static_cast<SHORT>(dlgH) };
+    state->info->SendDlgMessage(dlg, DM_RESIZEDIALOG, 0, &size);
+    COORD pos{ rect.Left, rect.Top };
+    state->info->SendDlgMessage(dlg, DM_MOVEDIALOG, 0, &pos);
+    SMALL_RECT box{ 0, 0, static_cast<SHORT>(dlgW - 1), static_cast<SHORT>(dlgH - 1) };
+    state->info->SendDlgMessage(dlg, DM_SETITEMPOSITION, 0, &box);
+    SMALL_RECT view{ 1, 1, static_cast<SHORT>(dlgW - 2), static_cast<SHORT>(dlgH - 3) };
+    state->info->SendDlgMessage(dlg, DM_SETITEMPOSITION, 1, &view);
+    SMALL_RECT status{ 2, static_cast<SHORT>(dlgH - 2), static_cast<SHORT>(dlgW - 3), static_cast<SHORT>(dlgH - 2) };
+    state->info->SendDlgMessage(dlg, DM_SETITEMPOSITION, 2, &status);
+}
+
+void FitConsole(State* state, HANDLE dlg) {
+    SMALL_RECT rect{};
+    int dlgW = 0;
+    int dlgH = 0;
+    ConsoleDialogSize(state->info, dlgW, dlgH, rect);
+    const int viewW = dlgW - 2;
+    const int viewH = dlgH - 3;
+    if (viewW < 1 || viewH < 1) return;
+    state->width = viewW;
+    state->height = viewH;
+    Clamp(state);
+    Render(state);
+    UpdateStatus(state, dlg);
+    state->info->SendDlgMessage(dlg, DM_ENABLEREDRAW, 0, nullptr);
+    PlaceViewer(state, dlg, dlgW, dlgH, rect);
+    state->info->SendDlgMessage(dlg, DM_ENABLEREDRAW, 1, nullptr);
+    state->info->SendDlgMessage(dlg, DM_REDRAW, 0, nullptr);
+}
+
 intptr_t WINAPI ViewerDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
     State* state = g_state;
     if (!state || !state->info || !state->info->DefDlgProc) return 1;
+    if (msg == DN_RESIZECONSOLE) {
+        FitConsole(state, dlg);
+        return 1;
+    }
     if (msg == DN_CONTROLINPUT && param2) {
         const auto* rec = static_cast<const INPUT_RECORD*>(param2);
         if (rec->EventType == MOUSE_EVENT && (rec->Event.MouseEvent.dwEventFlags & 0x0004)) {
@@ -323,6 +376,8 @@ void ShowPrettyViewer(const PluginStartupInfo& info, ViewDoc doc, std::vector<Vi
     int dlgH = rect.Bottom - rect.Top + 1;
     if (dlgW < 20) dlgW = 20;
     if (dlgH < 8) dlgH = 8;
+    if (dlgW > kMaxDlgW) dlgW = kMaxDlgW;
+    if (dlgH > kMaxDlgH) dlgH = kMaxDlgH;
 
     State state;
     state.info = &info;
@@ -334,6 +389,7 @@ void ShowPrettyViewer(const PluginStartupInfo& info, ViewDoc doc, std::vector<Vi
     state.height = dlgH - 3;
     if (state.width < 1) state.width = 1;
     if (state.height < 1) state.height = 1;
+    state.buffer.assign(static_cast<size_t>(kMaxDlgW) * kMaxDlgH, FAR_CHAR_INFO{});
     UpdateStatus(&state, nullptr);
     Render(&state);
     g_state = &state;
