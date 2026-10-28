@@ -430,6 +430,15 @@ struct ProcessPanelInputInfo {
 
 enum ADVANCED_CONTROL_COMMANDS {
     ACTL_SYNCHRO = 20,
+    ACTL_SETPROGRESSSTATE = 21,
+    ACTL_SETPROGRESSVALUE = 22,
+    ACTL_PROGRESSNOTIFY = 27,
+};
+
+struct ProgressValue {
+    size_t StructSize;
+    unsigned long long Completed;
+    unsigned long long Total;
 };
 
 enum SYNCHRO_EVENTS {

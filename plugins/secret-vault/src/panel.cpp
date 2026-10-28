@@ -6,6 +6,7 @@
 #include "ui.hpp"
 #include "sync.hpp"
 #include "vault.hpp"
+#include "nk_text.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -243,9 +244,15 @@ std::wstring CurrentName() {
     return item->FileName;
 }
 
-void FillItem(PluginPanelItem& item, const std::wstring& name, bool directory) {
+void FillItem(PluginPanelItem& item, const std::wstring& name, bool directory, const FILETIME* time = nullptr) {
     item.FileName = name.c_str();
     item.FileAttributes = directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+    if (time && (time->dwLowDateTime || time->dwHighDateTime)) {
+        item.CreationTime = *time;
+        item.LastAccessTime = *time;
+        item.LastWriteTime = *time;
+        item.ChangeTime = *time;
+    }
 }
 
 Listing* Publish(std::vector<Row> rows, std::vector<PluginPanelItem> items) {
@@ -277,6 +284,7 @@ bool AddPassword(VaultPanel* panel) {
         Say(L"Такое имя уже есть.");
         return false;
     }
+    item.updatedAt = IsoUtcNow();
     panel->data.passwords.push_back(std::move(item));
     return panel->Persist();
 }
@@ -293,6 +301,7 @@ bool EditPasswordAt(VaultPanel* panel, const std::wstring& name) {
         Say(L"Такое имя уже есть.");
         return false;
     }
+    edited.updatedAt = IsoUtcNow();
     *item = std::move(edited);
     return panel->Persist();
 }
@@ -395,6 +404,10 @@ bool ImportKeyPath(VaultPanel* panel, const std::wstring& path, bool silent, std
         if (!ImportOpenSshKey(path, pass, item, error)) return false;
     }
     item.name = UniqueKeyName(panel->data, FileStem(path), item.id);
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad))
+        item.updatedAt = FileTimeToIsoUtc(fad.ftLastWriteTime);
+    if (item.updatedAt.empty()) item.updatedAt = IsoUtcNow();
     panel->data.keys.push_back(std::move(item));
     return true;
 }
@@ -425,6 +438,7 @@ bool AddKey(VaultPanel* panel) {
         Say(L"Такое имя уже есть.");
         return false;
     }
+    if (item.updatedAt.empty()) item.updatedAt = IsoUtcNow();
     panel->data.keys.push_back(std::move(item));
     return panel->Persist();
 }
@@ -468,6 +482,7 @@ bool EditKeyAt(VaultPanel* panel, const std::wstring& name) {
     }
     item->name = edited.name;
     item->comment = edited.comment;
+    item->updatedAt = IsoUtcNow();
     return panel->Persist();
 }
 
@@ -657,13 +672,20 @@ intptr_t WINAPI GetFindDataW(GetFindDataInfo* info) {
     if (!info || !panel) return 0;
     std::vector<Row> rows;
     std::vector<PluginPanelItem> items;
+    FILETIME fallback{};
+    const bool haveFallback = VaultWriteTime(&fallback);
+    auto stamp = [&](const std::wstring& iso, PluginPanelItem& cell, bool directory) {
+        FILETIME time{};
+        if (!NkIsoToFileTime(iso, &time) && haveFallback) time = fallback;
+        FillItem(cell, cell.FileName ? cell.FileName : L"", directory, (time.dwLowDateTime || time.dwHighDateTime) ? &time : nullptr);
+    };
     if (panel->place == Place::Root) {
         Row passwords{ L"Пароли", L"логины и пароли" };
         Row keys{ L"Ключи", L"OpenSSH" };
         PluginPanelItem a{};
         PluginPanelItem b{};
-        FillItem(a, passwords.name, true);
-        FillItem(b, keys.name, true);
+        FillItem(a, passwords.name, true, haveFallback ? &fallback : nullptr);
+        FillItem(b, keys.name, true, haveFallback ? &fallback : nullptr);
         rows.push_back(std::move(passwords));
         rows.push_back(std::move(keys));
         items.push_back(a);
@@ -676,6 +698,7 @@ intptr_t WINAPI GetFindDataW(GetFindDataInfo* info) {
             else row.extra = item.user.empty() ? item.host : item.user;
             PluginPanelItem cell{};
             FillItem(cell, row.name, false);
+            stamp(item.updatedAt, cell, false);
             rows.push_back(std::move(row));
             items.push_back(cell);
         }
@@ -686,6 +709,7 @@ intptr_t WINAPI GetFindDataW(GetFindDataInfo* info) {
             row.extra = item.type;
             PluginPanelItem cell{};
             FillItem(cell, row.name, false);
+            stamp(item.updatedAt, cell, false);
             rows.push_back(std::move(row));
             items.push_back(cell);
         }

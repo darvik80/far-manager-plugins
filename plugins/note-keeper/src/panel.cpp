@@ -250,6 +250,18 @@ void Redraw() {
     }
 }
 
+bool NoteImportFile(const wchar_t* name, uintptr_t attributes) {
+    if (!name || !*name || wcscmp(name, L"..") == 0) return false;
+    if (attributes & FILE_ATTRIBUTE_DIRECTORY) return false;
+    const std::wstring lower = NkLower(name);
+    const auto slash = lower.find_last_of(L"\\/");
+    const std::wstring file = slash == std::wstring::npos ? lower : lower.substr(slash + 1);
+    const auto dot = file.rfind(L'.');
+    if (dot == std::wstring::npos || dot == 0) return false;
+    const std::wstring ext = file.substr(dot);
+    return ext == L".md" || ext == L".txt";
+}
+
 std::wstring SafeName(std::wstring name) {
     for (auto& ch : name) {
         if (ch == L'\\' || ch == L'/' || ch == L':' || ch == L'*' || ch == L'?' ||
@@ -740,9 +752,16 @@ intptr_t WINAPI GetFilesW(GetFilesInfo* info) {
 intptr_t WINAPI PutFilesW(PutFilesInfo* info) {
     auto* panel = PanelOf(info ? info->hPanel : nullptr);
     if (!info || !panel || panel->place == Place::Root) return 0;
+    const bool silent = (info->OpMode & kSilent) != 0;
+    size_t imported = 0;
+    size_t skipped = 0;
     for (size_t i = 0; i < info->ItemsNumber; ++i) {
         const wchar_t* name = info->PanelItem[i].FileName;
         if (!name || wcscmp(name, L"..") == 0) continue;
+        if (!NoteImportFile(name, info->PanelItem[i].FileAttributes)) {
+            ++skipped;
+            continue;
+        }
         const std::wstring path = JoinLocal(info->SrcPath, name);
         const std::wstring text = ReadText(path);
         std::wstring error;
@@ -754,8 +773,8 @@ intptr_t WINAPI PutFilesW(PutFilesInfo* info) {
             note.content = text;
             note.folder = L"default";
             if (!NkSaveNote(note, error)) {
-                if (!error.empty()) Say(error.c_str());
-                return 0;
+                if (!silent && !error.empty()) Say(error.c_str());
+                return imported ? 1 : 0;
             }
         } else {
             NkTodo todo;
@@ -764,13 +783,20 @@ intptr_t WINAPI PutFilesW(PutFilesInfo* info) {
             if (dot != std::wstring::npos) todo.title.resize(dot);
             todo.description = text;
             if (!NkSaveTodo(todo, error)) {
-                if (!error.empty()) Say(error.c_str());
-                return 0;
+                if (!silent && !error.empty()) Say(error.c_str());
+                return imported ? 1 : 0;
             }
         }
+        ++imported;
     }
-    panel->Reload(true);
-    return 1;
+    if (skipped && !silent) {
+        if (imported == 0)
+            Say(L"В Notes и Todos можно копировать только .md и .txt.");
+        else
+            Say(L"Часть файлов пропущена: нужны .md или .txt.");
+    }
+    if (imported) panel->Reload(true);
+    return imported ? 1 : 0;
 }
 
 intptr_t WINAPI DeleteFilesW(const DeleteFilesInfo* info) {

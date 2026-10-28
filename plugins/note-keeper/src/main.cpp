@@ -21,9 +21,9 @@ void WINAPI GetGlobalInfoW(GlobalInfo* info) {
     info->MinFarVersion.Build = FARMANAGERVERSION_BUILD;
     info->MinFarVersion.Stage = FARMANAGERVERSION_STAGE;
     info->Version.Major = 1;
-    info->Version.Minor = 0;
+    info->Version.Minor = 1;
     info->Version.Revision = 0;
-    info->Version.Build = 1;
+    info->Version.Build = 0;
     info->Version.Stage = VS_RELEASE;
     info->Guid = MainGuid;
     info->Title = L"NoteKeeper";

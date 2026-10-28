@@ -6,6 +6,7 @@
 #include "teleport.hpp"
 #include "ui.hpp"
 #include "vault_link.hpp"
+#include "far/form.hpp"
 
 #include <algorithm>
 #include <map>
@@ -276,120 +277,27 @@ bool EditServer(StoredServer& server, bool create) {
     wcsncpy_s(proxy, server.proxy.c_str(), _TRUNCATE);
     wcsncpy_s(password, server.password.c_str(), _TRUNCATE);
 
+    const std::wstring title = farform::PaddedTitle(
+        create ? L"Новый сервер" : (server.fromTeleport ? L"Teleport" : L"Сервер"));
     FarDialogItem items[18]{};
-    items[0].Type = DI_DOUBLEBOX;
-    items[0].X1 = 0;
-    items[0].Y1 = 0;
-    items[0].X2 = 62;
-    items[0].Y2 = 14;
-    items[0].Data = create ? L" Новый сервер " : (server.fromTeleport ? L" Teleport " : L" Сервер ");
-
-    items[1].Type = DI_TEXT;
-    items[1].X1 = 2;
-    items[1].Y1 = 2;
-    items[1].Y2 = 2;
-    items[1].Data = L"Имя:";
-    items[2].Type = DI_EDIT;
-    items[2].X1 = 12;
-    items[2].Y1 = 2;
-    items[2].X2 = 60;
-    items[2].Y2 = 2;
-    items[2].Data = name;
-    items[2].MaxLength = 127;
-    items[2].Flags = DIF_FOCUS;
-
-    items[3].Type = DI_TEXT;
-    items[3].X1 = 2;
-    items[3].Y1 = 4;
-    items[3].Y2 = 4;
-    items[3].Data = L"Адрес:";
-    items[4].Type = DI_EDIT;
-    items[4].X1 = 12;
-    items[4].Y1 = 4;
-    items[4].X2 = 60;
-    items[4].Y2 = 4;
-    items[4].Data = host;
-    items[4].MaxLength = 255;
-
-    items[5].Type = DI_TEXT;
-    items[5].X1 = 2;
-    items[5].Y1 = 6;
-    items[5].Y2 = 6;
-    items[5].Data = L"Порт:";
-    items[6].Type = DI_EDIT;
-    items[6].X1 = 12;
-    items[6].Y1 = 6;
-    items[6].X2 = 18;
-    items[6].Y2 = 6;
-    items[6].Data = port;
-    items[6].MaxLength = 5;
-
-    items[7].Type = DI_TEXT;
-    items[7].X1 = 21;
-    items[7].Y1 = 6;
-    items[7].Y2 = 6;
-    items[7].Data = L"Логин:";
-    items[8].Type = DI_EDIT;
-    items[8].X1 = 29;
-    items[8].Y1 = 6;
-    items[8].X2 = 60;
-    items[8].Y2 = 6;
-    items[8].Data = user;
-    items[8].MaxLength = 127;
-
-    items[9].Type = DI_TEXT;
-    items[9].X1 = 2;
-    items[9].Y1 = 8;
-    items[9].Y2 = 8;
-    items[9].Data = L"Ключ:";
-    items[10].Type = DI_EDIT;
-    items[10].X1 = 12;
-    items[10].Y1 = 8;
-    items[10].X2 = 60;
-    items[10].Y2 = 8;
-    items[10].Data = key;
-    items[10].MaxLength = 519;
-
-    items[11].Type = DI_TEXT;
-    items[11].X1 = 2;
-    items[11].Y1 = 10;
-    items[11].Y2 = 10;
-    items[11].Data = L"Прокси:";
-    items[12].Type = DI_EDIT;
-    items[12].X1 = 12;
-    items[12].Y1 = 10;
-    items[12].X2 = 32;
-    items[12].Y2 = 10;
-    items[12].Data = proxy;
-    items[12].MaxLength = 255;
-
-    items[13].Type = DI_TEXT;
-    items[13].X1 = 35;
-    items[13].Y1 = 10;
-    items[13].Y2 = 10;
-    items[13].Data = L"Пароль:";
-    items[14].Type = DI_PSWEDIT;
-    items[14].X1 = 44;
-    items[14].Y1 = 10;
-    items[14].X2 = 60;
-    items[14].Y2 = 10;
-    items[14].Data = password;
-    items[14].MaxLength = 255;
-
-    items[15].Type = DI_TEXT;
-    items[15].Y1 = 11;
-    items[15].Flags = DIF_SEPARATOR;
-
-    items[16].Type = DI_BUTTON;
-    items[16].X1 = 18;
-    items[16].Y1 = 12;
-    items[16].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
-    items[16].Data = L"Сохранить";
-    items[17].Type = DI_BUTTON;
-    items[17].X1 = 34;
-    items[17].Y1 = 12;
-    items[17].Flags = DIF_CENTERGROUP;
-    items[17].Data = L"Отмена";
+    farform::FillBox(items[0], farform::kWidth, 15, title.c_str());
+    farform::FillLabel(items[1], 2, L"Имя:");
+    farform::FillEdit(items[2], 2, farform::kEditX, farform::kInnerR, name, 127, false, DIF_FOCUS);
+    farform::FillLabel(items[3], 4, L"Адрес:");
+    farform::FillEdit(items[4], 4, farform::kEditX, farform::kInnerR, host, 255, false);
+    farform::FillLabel(items[5], 6, L"Порт:");
+    farform::FillEdit(items[6], 6, farform::kEditX, 18, port, 5, false);
+    farform::FillLabel(items[7], 6, L"Логин:", 21);
+    farform::FillEdit(items[8], 6, 29, farform::kInnerR, user, 127, false);
+    farform::FillLabel(items[9], 8, L"Ключ:");
+    farform::FillEdit(items[10], 8, farform::kEditX, farform::kInnerR, key, 519, false);
+    farform::FillLabel(items[11], 10, L"Прокси:");
+    farform::FillEdit(items[12], 10, farform::kEditX, 32, proxy, 255, false);
+    farform::FillLabel(items[13], 10, L"Пароль:", 35);
+    farform::FillEdit(items[14], 10, 44, farform::kInnerR, password, 255, true);
+    farform::FillSeparator(items[15], 11);
+    farform::FillButton(items[16], 12, L"Сохранить", true);
+    farform::FillButton(items[17], 12, L"Отмена", false);
 
     if (!create && server.fromTeleport) {
         items[2].Flags = DIF_READONLY;
@@ -398,7 +306,7 @@ bool EditServer(StoredServer& server, bool create) {
         items[8].Flags |= DIF_FOCUS;
     }
 
-    HANDLE dialog = OpenGuardedDialog(items, 18, 63, 15, 17);
+    HANDLE dialog = OpenGuardedDialog(items, 18, farform::kWidth, 15, 17);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) {
         Say(L"Не удалось открыть диалог сервера.");
         return false;
@@ -430,8 +338,13 @@ bool EditServer(StoredServer& server, bool create) {
     server.user = user;
     server.proxy = proxy;
     server.fromConfig = false;
-    if (key[0] && GetFileAttributesW(key) != INVALID_FILE_ATTRIBUTES) {
+    const bool keyPath = key[0] && (wcschr(key, L'\\') || wcschr(key, L'/') ||
+                                    (key[1] == L':' && ((key[0] >= L'A' && key[0] <= L'Z') ||
+                                                        (key[0] >= L'a' && key[0] <= L'z'))));
+    DWORD keyAttr = keyPath ? GetFileAttributesW(key) : INVALID_FILE_ATTRIBUTES;
+    if (keyPath && keyAttr != INVALID_FILE_ATTRIBUTES && (keyAttr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
         server.keyFile = key;
+        server.vaultKey.clear();
     } else {
         server.vaultKey = key;
         server.keyFile.clear();
@@ -857,44 +770,102 @@ intptr_t WINAPI SetDirectoryW(const SetDirectoryInfo* info) {
     return 1;
 }
 
+unsigned long long LocalBytes(const std::wstring& path) {
+    WIN32_FILE_ATTRIBUTE_DATA fad{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad)) return 0;
+    if (fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        unsigned long long sum = 0;
+        WIN32_FIND_DATAW found{};
+        HANDLE search = FindFirstFileW((path + L"\\*").c_str(), &found);
+        if (search == INVALID_HANDLE_VALUE) return 0;
+        do {
+            if (wcscmp(found.cFileName, L".") == 0 || wcscmp(found.cFileName, L"..") == 0) continue;
+            sum += LocalBytes(path + L"\\" + found.cFileName);
+        } while (FindNextFileW(search, &found));
+        FindClose(search);
+        return sum;
+    }
+    ULARGE_INTEGER size;
+    size.LowPart = fad.nFileSizeLow;
+    size.HighPart = fad.nFileSizeHigh;
+    return size.QuadPart;
+}
+
 intptr_t WINAPI GetFilesW(GetFilesInfo* info) {
     auto* panel = PanelOf(info ? info->hPanel : nullptr);
     if (!info || !panel || panel->sites || !info->DestPath) return 0;
+    CopyMeter meter;
+    meter.silent = (info->OpMode & kSilent) != 0;
     for (size_t i = 0; i < info->ItemsNumber; ++i) {
         const wchar_t* name = info->PanelItem[i].FileName;
         if (!name || wcscmp(name, L"..") == 0) continue;
-        const bool directory = (info->PanelItem[i].FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        meter.total += info->PanelItem[i].FileSize;
+    }
+    CopyMeterBegin(meter);
+    intptr_t ok = 1;
+    for (size_t i = 0; i < info->ItemsNumber; ++i) {
+        const wchar_t* name = info->PanelItem[i].FileName;
+        if (!name || wcscmp(name, L"..") == 0) continue;
         std::wstring error;
+        if (CopyMeterAborted(&meter, error)) {
+            if ((info->OpMode & kSilent) == 0) Say(error.c_str());
+            ok = 0;
+            break;
+        }
+        CopyMeterFile(meter, name);
+        const bool directory = (info->PanelItem[i].FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         const std::string remote = JoinRemote(panel->remote, Utf8(name));
-        if (!panel->connection.Download(remote, JoinLocal(info->DestPath, name), directory, error)) {
+        if (!panel->connection.Download(remote, JoinLocal(info->DestPath, name), directory, error, &meter)) {
             if ((info->OpMode & kSilent) == 0 && !error.empty()) Say(error.c_str());
-            return 0;
+            ok = 0;
+            break;
         }
         if (info->Move && !panel->connection.Remove(remote, directory, error)) {
             if ((info->OpMode & kSilent) == 0 && !error.empty()) Say(error.c_str());
-            return 0;
+            ok = 0;
+            break;
         }
     }
-    return 1;
+    CopyMeterEnd();
+    return ok;
 }
 
 intptr_t WINAPI PutFilesW(PutFilesInfo* info) {
     auto* panel = PanelOf(info ? info->hPanel : nullptr);
     if (!info || !panel || panel->sites || !info->SrcPath) return 0;
+    CopyMeter meter;
+    meter.silent = (info->OpMode & kSilent) != 0;
     for (size_t i = 0; i < info->ItemsNumber; ++i) {
         const wchar_t* name = info->PanelItem[i].FileName;
         if (!name || wcscmp(name, L"..") == 0) continue;
-        const bool directory = (info->PanelItem[i].FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        unsigned long long size = info->PanelItem[i].FileSize;
+        if (size == 0) size = LocalBytes(JoinLocal(info->SrcPath, name));
+        meter.total += size;
+    }
+    CopyMeterBegin(meter);
+    intptr_t ok = 1;
+    for (size_t i = 0; i < info->ItemsNumber; ++i) {
+        const wchar_t* name = info->PanelItem[i].FileName;
+        if (!name || wcscmp(name, L"..") == 0) continue;
         std::wstring error;
+        if (CopyMeterAborted(&meter, error)) {
+            if ((info->OpMode & kSilent) == 0) Say(error.c_str());
+            ok = 0;
+            break;
+        }
+        CopyMeterFile(meter, name);
+        const bool directory = (info->PanelItem[i].FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         const std::wstring local = JoinLocal(info->SrcPath, name);
         const std::string remote = JoinRemote(panel->remote, Utf8(name));
-        if (!panel->connection.Upload(local, remote, directory, error)) {
+        if (!panel->connection.Upload(local, remote, directory, error, &meter)) {
             if ((info->OpMode & kSilent) == 0 && !error.empty()) Say(error.c_str());
-            return 0;
+            ok = 0;
+            break;
         }
         if (info->Move) RemoveLocal(local, directory);
     }
-    return 1;
+    CopyMeterEnd();
+    return ok;
 }
 
 intptr_t WINAPI DeleteFilesW(const DeleteFilesInfo* info) {

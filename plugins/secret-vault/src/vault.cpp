@@ -332,11 +332,25 @@ bool NameTaken(const VaultData& data, bool keys, const std::wstring& name, const
 std::wstring WriteTempKey(const KeyRecord& key, std::wstring& error) {
     const std::wstring path = NkSecureTempPath(L"FarVault", L"key", L".pem", error);
     if (path.empty()) return {};
-    const std::string pem = Utf8(key.privateKey);
+    std::string pem = Utf8(key.privateKey);
+    NkNormalizePem(pem);
     if (!NkWriteSecureFile(path, pem.data(), pem.size())) {
         error = L"Не удалось записать временный ключ.";
         DeleteFileW(path.c_str());
         return {};
     }
     return path;
+}
+
+bool VaultWriteTime(FILETIME* out) {
+    if (!out) return false;
+    HANDLE file = CreateFileW(VaultPath().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    FILETIME write{};
+    const BOOL ok = GetFileTime(file, nullptr, nullptr, &write);
+    CloseHandle(file);
+    if (!ok || (write.dwLowDateTime == 0 && write.dwHighDateTime == 0)) return false;
+    *out = write;
+    return true;
 }

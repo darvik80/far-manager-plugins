@@ -27,4 +27,19 @@ inline std::wstring Lower(std::wstring text) {
     return text;
 }
 
+inline std::wstring FileTimeToIsoUtc(const FILETIME& ft) {
+    SYSTEMTIME st{};
+    if (!FileTimeToSystemTime(&ft, &st)) return {};
+    wchar_t buf[32]{};
+    swprintf_s(buf, L"%04u-%02u-%02uT%02u:%02u:%02uZ",
+               st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    return buf;
+}
+
+inline std::wstring IsoUtcNow() {
+    FILETIME ft{};
+    GetSystemTimeAsFileTime(&ft);
+    return FileTimeToIsoUtc(ft);
+}
+
 #endif

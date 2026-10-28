@@ -1,13 +1,19 @@
 #include "sftp_client.hpp"
+#include "guid.hpp"
 #include "ssh_config.hpp"
 #include "teleport.hpp"
 #include "ui.hpp"
 #include "vault_link.hpp"
+#include "far/form.hpp"
+#include "nk_secure.hpp"
 
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 
+#include <cctype>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <vector>
 
@@ -67,7 +73,7 @@ std::string AppKnownHosts() {
 
 ssize_t JumpRecv(libssh2_socket_t, void* buffer, size_t length, int, void** abstract) {
     auto* self = static_cast<SftpConnection*>(*abstract);
-    if (!self->WaitJumpData(25000)) return -1;
+    if (!self->WaitJumpData(self->JumpTimeout())) return -1;
     DWORD read = 0;
     const DWORD want = static_cast<DWORD>(length > 1 << 20 ? 1 << 20 : length);
     if (!ReadFile(self->JumpOut(), buffer, want, &read, nullptr) || read == 0) return -1;
@@ -93,7 +99,8 @@ DWORD WINAPI DrainJumpErr(LPVOID param) {
     if (!pipe) return 0;
     char buf[512];
     DWORD n = 0;
-    while (ReadFile(pipe, buf, sizeof(buf), &n, nullptr) && n > 0) {}
+    while (ReadFile(pipe, buf, sizeof(buf), &n, nullptr) && n > 0)
+        self->AppendJumpErr(buf, n);
     return 0;
 }
 
@@ -186,6 +193,45 @@ bool SafeCmdTitle(const std::wstring& text) {
     return text.find_first_of(L"&|<>\"^%") == std::wstring::npos;
 }
 
+bool ExclusiveKey(const StoredServer& server) {
+    return !server.fromTeleport && (!server.vaultKey.empty() || !server.keyFile.empty());
+}
+
+bool ResolveExclusiveKey(const StoredServer& server, std::wstring& key, std::wstring& cleanup, std::wstring& error) {
+    key.clear();
+    cleanup.clear();
+    if (!server.vaultKey.empty()) {
+        key = VaultLookupKeyFile(server.vaultKey);
+        if (key.empty() || !FileExists(key)) {
+            error = L"Ключ не найден в Secret Vault / NoteKeeper: " + server.vaultKey;
+            key.clear();
+            return false;
+        }
+        cleanup = key;
+        return true;
+    }
+    if (!server.keyFile.empty()) {
+        key = server.keyFile;
+        if (!FileExists(key)) {
+            error = L"Файл ключа не найден: " + server.keyFile;
+            key.clear();
+            return false;
+        }
+        return true;
+    }
+    return true;
+}
+
+void AppendExclusiveIdentity(std::wstring& command, const std::wstring& key) {
+    command += L" -F none";
+    command += L" -i " + QuoteArg(key);
+    command += L" -o IdentitiesOnly=yes";
+    command += L" -o IdentityAgent=none";
+    command += L" -o PreferredAuthentications=publickey";
+    command += L" -o PubkeyAcceptedKeyTypes=+ssh-rsa";
+    command += L" -v";
+}
+
 bool LaunchConsole(const std::wstring& inner, const std::wstring& title, const std::wstring& cleanup, std::wstring& error) {
     std::wstring command = L"cmd.exe /s /c \"";
     if (SafeCmdTitle(title)) command += L"title " + title + L" & ";
@@ -210,6 +256,8 @@ bool LaunchConsole(const std::wstring& inner, const std::wstring& title, const s
 
 }  // namespace
 
+std::wstring PrepareIdentityFile(const std::wstring& path);
+
 bool OpenSshTerminal(const StoredServer& server, std::wstring& error) {
     if (server.host.empty()) {
         error = L"Host is empty.";
@@ -233,31 +281,38 @@ bool OpenSshTerminal(const StoredServer& server, std::wstring& error) {
             return false;
         }
         inner = QuoteArg(ssh) + L" -t";
-        if (FileExists(SshConfigPath())) inner += L" -F " + QuoteArg(SshConfigPath());
-        if (server.fromConfig) {
-            inner += L" " + QuoteArg(server.name);
-        } else {
+        std::wstring key;
+        const bool exclusive = ExclusiveKey(server);
+        if (exclusive) {
+            if (!ResolveExclusiveKey(server, key, cleanup, error)) return false;
+            error = PrepareIdentityFile(key);
+            if (!error.empty()) return false;
+            AppendExclusiveIdentity(inner, key);
             if (!server.port.empty() && server.port != L"22")
                 inner += L" -p " + QuoteArg(server.port);
             if (!server.proxy.empty())
                 inner += L" -J " + QuoteArg(server.proxy);
-            std::wstring key = server.keyFile;
-            if (key.empty() && !server.vaultKey.empty()) {
-                key = VaultLookupKeyFile(server.vaultKey);
-                cleanup = key;
-            }
-            if (key.empty()) {
+            std::wstring target = server.user.empty() ? server.host : server.user + L"@" + server.host;
+            inner += L" " + QuoteArg(target);
+        } else {
+            if (FileExists(SshConfigPath())) inner += L" -F " + QuoteArg(SshConfigPath());
+            if (server.fromConfig) {
+                inner += L" " + QuoteArg(server.name);
+            } else {
+                if (!server.port.empty() && server.port != L"22")
+                    inner += L" -p " + QuoteArg(server.port);
+                if (!server.proxy.empty())
+                    inner += L" -J " + QuoteArg(server.proxy);
                 for (const auto& id : server.identityFiles) {
                     if (FileExists(id)) {
                         key = id;
                         break;
                     }
                 }
+                if (!key.empty()) inner += L" -i " + QuoteArg(key);
+                std::wstring target = server.user.empty() ? server.host : server.user + L"@" + server.host;
+                inner += L" " + QuoteArg(target);
             }
-            if (!key.empty() && FileExists(key)) inner += L" -i " + QuoteArg(key);
-            else cleanup.clear();
-            std::wstring target = server.user.empty() ? server.host : server.user + L"@" + server.host;
-            inner += L" " + QuoteArg(target);
         }
     }
     return LaunchConsole(inner, title, cleanup, error);
@@ -281,6 +336,77 @@ SftpConnection::~SftpConnection() {
     Close();
 }
 
+bool g_copyCancel = false;
+
+void SftpConnection::AppendJumpErr(const char* data, size_t n) {
+    if (!data || n == 0) return;
+    jumpErrText_.append(data, n);
+    if (jumpErrText_.size() > 16384)
+        jumpErrText_.erase(0, jumpErrText_.size() - 16384);
+}
+
+bool ContainsI(const std::string& text, const char* needle) {
+    if (!needle || !*needle) return false;
+    const size_t n = strlen(needle);
+    for (size_t i = 0; i + n <= text.size(); ++i) {
+        size_t j = 0;
+        for (; j < n; ++j) {
+            const unsigned char a = static_cast<unsigned char>(text[i + j]);
+            const unsigned char b = static_cast<unsigned char>(needle[j]);
+            if (std::tolower(a) != std::tolower(b)) break;
+        }
+        if (j == n) return true;
+    }
+    return false;
+}
+
+std::wstring SftpConnection::TakeJumpErr() {
+    if (drainThread_) WaitForSingleObject(drainThread_, 800);
+    std::string text = jumpErrText_;
+    jumpErrText_.clear();
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' '))
+        text.pop_back();
+    if (text.empty()) return {};
+    if (ContainsI(text, "UNPROTECTED") || ContainsI(text, "too open") ||
+        ContainsI(text, "bad permissions") || ContainsI(text, "Permissions for"))
+        return L"OpenSSH проигнорировал ключ: слишком открытые права на временный файл.";
+    if (ContainsI(text, "Skipping ssh-rsa") || ContainsI(text, "algo not in PubkeyAccepted"))
+        return L"OpenSSH не отправил RSA-ключ (алгоритм ssh-rsa выключен).";
+    if (ContainsI(text, "passphrase"))
+        return L"Ключ закрыт паролем, OpenSSH в BatchMode его не спрашивает.";
+    const size_t loadAt = text.find("Load key ");
+    if (loadAt != std::string::npos) {
+        std::string line = text.substr(loadAt);
+        const auto nl = line.find_first_of("\r\n");
+        if (nl != std::string::npos) line.resize(nl);
+        return Wide(line.c_str());
+    }
+    std::string offer;
+    const char* markers[] = {"Offering public key:", "Offering", "Authentications that can continue:"};
+    size_t pos = std::string::npos;
+    const char* hit = nullptr;
+    for (const char* marker : markers) {
+        const size_t at = text.find(marker);
+        if (at != std::string::npos && (pos == std::string::npos || at < pos)) {
+            pos = at;
+            hit = marker;
+        }
+    }
+    if (pos != std::string::npos && hit) {
+        std::string line = text.substr(pos);
+        const auto nl = line.find_first_of("\r\n");
+        if (nl != std::string::npos) line.resize(nl);
+        offer = line;
+    }
+    const auto lastNl = text.find_last_of('\n');
+    std::string last = lastNl == std::string::npos ? text : text.substr(lastNl + 1);
+    while (!last.empty() && (last[0] == '\r' || last[0] == ' ' || last[0] == '\t')) last.erase(last.begin());
+    std::wstring out = Wide(last.c_str());
+    if (!offer.empty() && ContainsI(last, "Permission denied"))
+        out += L"\n" + Wide(offer.c_str()) + L"\nКонсольный ssh без -i, скорее всего, берёт другой ключ из агента.";
+    return out;
+}
+
 bool SftpConnection::WaitJumpData(DWORD timeoutMs) const {
     if (closing_ || !jumpOut_) return false;
     const DWORD start = GetTickCount();
@@ -292,6 +418,7 @@ bool SftpConnection::WaitJumpData(DWORD timeoutMs) const {
         DWORD code = 0;
         if (jumpProcess_ && GetExitCodeProcess(jumpProcess_, &code) && code != STILL_ACTIVE)
             return false;
+        if (g_copyCancel) return false;
         if (GetTickCount() - start >= timeoutMs) return false;
         Sleep(20);
     }
@@ -315,6 +442,8 @@ void SftpConnection::Close() {
     }
     pipeSftp_ = false;
     sftpNextId_ = 1;
+    jumpWaitMs_ = 25000;
+    jumpErrText_.clear();
     if (sftp_) {
         libssh2_sftp_shutdown(static_cast<LIBSSH2_SFTP*>(sftp_));
         sftp_ = nullptr;
@@ -328,6 +457,11 @@ void SftpConnection::Close() {
         sock_ = INVALID_SOCKET;
     }
     home_.clear();
+    if (!keyCleanup_.empty()) {
+        DeleteFileW(keyCleanup_.c_str());
+        DeleteFileW((keyCleanup_ + L".pub").c_str());
+        keyCleanup_.clear();
+    }
     closing_ = false;
 }
 
@@ -376,6 +510,7 @@ bool SftpConnection::TcpConnect(const std::string& host, const std::string& port
 }
 
 bool SftpConnection::PipeConnect(const std::wstring& command, std::wstring& error) {
+    jumpErrText_.clear();
     SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
     HANDLE outRead = nullptr, outWrite = nullptr, inRead = nullptr, inWrite = nullptr, errRead = nullptr, errWrite = nullptr;
     CreatePipe(&outRead, &outWrite, &security, 0);
@@ -415,6 +550,68 @@ bool SftpConnection::PipeConnect(const std::wstring& command, std::wstring& erro
     return true;
 }
 
+bool SftpConnection::OpenSshSftpPipe(const StoredServer& server, std::wstring& error) {
+    const std::wstring ssh = FindSshExe();
+    if (ssh.empty()) {
+        error = L"Не найден ssh.exe (OpenSSH).";
+        return false;
+    }
+    jumpWaitMs_ = 60000;
+    std::wstring command = QuoteArg(ssh);
+    std::wstring key;
+    std::wstring cleanup;
+    const bool exclusive = ExclusiveKey(server);
+    if (exclusive) {
+        if (!ResolveExclusiveKey(server, key, cleanup, error)) return false;
+        error = PrepareIdentityFile(key);
+        if (!error.empty()) return false;
+        keyCleanup_ = cleanup;
+        AppendExclusiveIdentity(command, key);
+    } else if (FileExists(SshConfigPath())) {
+        command += L" -F " + QuoteArg(SshConfigPath());
+    }
+    command += L" -o BatchMode=yes -o StrictHostKeyChecking=accept-new";
+    const bool useAlias = !exclusive && server.fromConfig && !server.name.empty();
+    std::wstring dest = useAlias
+        ? server.name
+        : (server.user.empty() ? server.host : server.user + L"@" + server.host);
+    if (!useAlias) {
+        if (!server.port.empty() && server.port != L"22")
+            command += L" -p " + QuoteArg(server.port);
+        if (!server.proxy.empty())
+            command += L" -J " + QuoteArg(server.proxy);
+    }
+    if (!exclusive) {
+        for (const auto& id : server.identityFiles) {
+            if (FileExists(id)) {
+                key = id;
+                break;
+            }
+        }
+        if (!key.empty() && FileExists(key))
+            command += L" -i " + QuoteArg(key);
+    }
+    command += L" " + QuoteArg(dest) + L" -s sftp";
+    if (!PipeConnect(command, error)) return false;
+    DWORD code = 0;
+    if (jumpProcess_ && GetExitCodeProcess(jumpProcess_, &code) && code != STILL_ACTIVE) {
+        if (drainThread_) WaitForSingleObject(drainThread_, 400);
+        error = TakeJumpErr();
+        if (error.empty()) {
+            error = exclusive
+                ? L"ssh.exe сразу вышел. Ключ из vault не принят сервером."
+                : L"ssh.exe сразу вышел. Проверь ключ и ssh-agent.";
+        }
+        return false;
+    }
+    if (!PipeSftpInit(error)) {
+        const std::wstring stderrText = TakeJumpErr();
+        if (!stderrText.empty()) error = stderrText;
+        return false;
+    }
+    return true;
+}
+
 bool SftpConnection::JumpConnect(const StoredServer& server, std::wstring& error) {
     const std::wstring ssh = FindSshExe();
     if (ssh.empty()) {
@@ -433,23 +630,62 @@ bool SftpConnection::TshConnect(const StoredServer& server, std::wstring& error)
         error = L"Сессия Teleport истекла. F6 — tsh login.";
         return false;
     }
+    const std::wstring tsh = TshExe();
+    if (tsh.empty()) {
+        error = L"tsh не найден.";
+        return false;
+    }
+    const std::wstring alias = server.name.empty() ? server.host : server.name;
+    std::wstring target = server.user.empty() ? alias : server.user + L"@" + alias;
+    jumpWaitMs_ = 90000;
+    std::wstring command = QuoteArg(tsh) + L" proxy ssh --no-relogin " + QuoteArg(target);
+    if (!PipeConnect(command, error)) return false;
+    DWORD code = 0;
+    if (jumpProcess_ && GetExitCodeProcess(jumpProcess_, &code) && code != STILL_ACTIVE) {
+        error = L"tsh proxy сразу вышел. F6 — tsh login, либо F2 — терминал.";
+        return false;
+    }
+    return true;
+}
+
+bool SftpConnection::TshSftpPipe(const StoredServer& server, std::wstring& error) {
+    if (!TshLoggedIn()) {
+        error = L"Сессия Teleport истекла. F6 — tsh login.";
+        return false;
+    }
+    const std::wstring tsh = TshExe();
     const std::wstring ssh = FindSshExe();
+    if (tsh.empty()) {
+        error = L"tsh не найден.";
+        return false;
+    }
     if (ssh.empty()) {
         error = L"Не найден ssh.exe (OpenSSH).";
         return false;
     }
     const std::wstring alias = server.name.empty() ? server.host : server.name;
-    std::wstring target = server.user.empty() ? alias : server.user + L"@" + alias;
-    std::wstring command = QuoteArg(ssh) + L" -T -o BatchMode=yes -o ConnectTimeout=20";
-    if (FileExists(SshConfigPath())) command += L" -F " + QuoteArg(SshConfigPath());
-    command += L" -s " + QuoteArg(target) + L" sftp";
+    const std::wstring dest = server.user.empty() ? alias : server.user + L"@" + alias;
+    const std::wstring identity = TshIdentityFile();
+    const std::wstring cert = TshCertificateFile();
+    jumpWaitMs_ = 90000;
+    const std::wstring proxy = QuoteArg(tsh) + L" proxy ssh --no-relogin %r@%h";
+    std::wstring command = QuoteArg(ssh);
+    command += L" -o BatchMode=yes -o StrictHostKeyChecking=accept-new";
+    command += L" -o " + QuoteArg(L"ProxyCommand=" + proxy);
+    if (!identity.empty() && FileExists(identity))
+        command += L" -i " + QuoteArg(identity);
+    if (!cert.empty() && FileExists(cert))
+        command += L" -o " + QuoteArg(L"CertificateFile=" + cert);
+    if (!identity.empty() && FileExists(identity))
+        command += L" -o IdentitiesOnly=yes";
+    command += L" " + QuoteArg(dest) + L" -s sftp";
     if (!PipeConnect(command, error)) return false;
     DWORD code = 0;
     if (jumpProcess_ && GetExitCodeProcess(jumpProcess_, &code) && code != STILL_ACTIVE) {
-        error = L"ssh/tsh сразу вышел. F6 — tsh login, либо F2 — терминал.";
+        error = L"Teleport SFTP сразу вышел. F6 — tsh login, либо F2 — терминал.";
         return false;
     }
-    return true;
+    return PipeSftpInit(error);
 }
 
 bool SftpConnection::CheckHostKey(const std::string& host, int port, std::wstring& error, bool viaTsh) {
@@ -490,50 +726,517 @@ bool SftpConnection::CheckHostKey(const std::string& host, int port, std::wstrin
     return ok;
 }
 
+constexpr intptr_t kCopyDlgH = 9;
+constexpr int kCopyBarW = static_cast<int>(farform::kInnerR - farform::kLabelX + 1);
+
+HANDLE g_copyDlg = nullptr;
+CopyMeter* g_copyMeter = nullptr;
+std::wstring g_copyFile = L"…";
+std::wstring g_copyStats;
+FAR_CHAR_INFO g_copyCells[kCopyBarW]{};
+FarColor g_copyEmpty{};
+FarColor g_copyFill{};
+DWORD g_copyTick = 0;
+
+void InitBarColors() {
+    g_copyEmpty = {};
+    g_copyEmpty.Flags = FCF_FG_4BIT | FCF_BG_4BIT;
+    g_copyEmpty.ForegroundColor = 0x00;
+    g_copyEmpty.BackgroundColor = 0x07;
+    g_copyFill = g_copyEmpty;
+    g_copyFill.ForegroundColor = 0x07;
+    g_copyFill.BackgroundColor = 0x00;
+}
+
+void CaptureBarColors(const FarColor& dialog) {
+    g_copyEmpty = dialog;
+    g_copyFill = dialog;
+    g_copyFill.ForegroundColor = dialog.BackgroundColor;
+    g_copyFill.BackgroundColor = dialog.ForegroundColor;
+}
+
+void FillBarCells(const CopyMeter& meter) {
+    int filled = 0;
+    if (meter.total > 0) {
+        filled = (meter.done >= meter.total)
+                     ? kCopyBarW
+                     : static_cast<int>(meter.done * static_cast<unsigned long long>(kCopyBarW) / meter.total);
+    } else if (meter.done > 0) {
+        const int span = 8;
+        const int start = static_cast<int>((meter.done / 65536ull) % static_cast<unsigned long long>(kCopyBarW));
+        for (int i = 0; i < kCopyBarW; ++i) {
+            const int d = (i - start + kCopyBarW) % kCopyBarW;
+            g_copyCells[i] = {};
+            g_copyCells[i].Char = L' ';
+            g_copyCells[i].Attributes = (d < span) ? g_copyFill : g_copyEmpty;
+        }
+        return;
+    }
+    if (filled < 0) filled = 0;
+    if (filled > kCopyBarW) filled = kCopyBarW;
+    for (int i = 0; i < kCopyBarW; ++i) {
+        g_copyCells[i] = {};
+        g_copyCells[i].Char = L' ';
+        g_copyCells[i].Attributes = (i < filled) ? g_copyFill : g_copyEmpty;
+    }
+    if (meter.total == 0) return;
+    const int pct = static_cast<int>(meter.done >= meter.total ? 100 : (meter.done * 100ull / meter.total));
+    wchar_t label[16]{};
+    swprintf_s(label, L" %d%% ", pct);
+    const int len = static_cast<int>(wcslen(label));
+    if (len <= 0 || len > kCopyBarW) return;
+    const int start = (kCopyBarW - len) / 2;
+    for (int i = 0; i < len; ++i) g_copyCells[start + i].Char = label[i];
+}
+
+std::wstring FitCopyName(std::wstring name) {
+    if (name.size() <= static_cast<size_t>(kCopyBarW)) return name;
+    return L"…" + name.substr(name.size() - static_cast<size_t>(kCopyBarW - 1));
+}
+
+bool IsKeyDown(const INPUT_RECORD& rec, WORD vk) {
+    return ((rec.EventType & 0x7FFF) == KEY_EVENT) && rec.Event.KeyEvent.bKeyDown &&
+           rec.Event.KeyEvent.wVirtualKeyCode == vk;
+}
+
+void PollCopyCancel(CopyMeter& meter) {
+    if (meter.silent) return;
+    if (g_copyCancel) {
+        meter.cancelled = true;
+        return;
+    }
+    HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    if (!input || input == INVALID_HANDLE_VALUE) return;
+    INPUT_RECORD rec{};
+    DWORD count = 0;
+    if (!PeekConsoleInputW(input, &rec, 1, &count) || count == 0) return;
+    if (!IsKeyDown(rec, VK_ESCAPE)) return;
+    DWORD read = 0;
+    ReadConsoleInputW(input, &rec, 1, &read);
+    meter.cancelled = true;
+    g_copyCancel = true;
+}
+
+intptr_t WINAPI CopyDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
+    if (msg == DN_INITDIALOG) {
+        if (g_info.SendDlgMessage) g_info.SendDlgMessage(dlg, DM_SETINPUTNOTIFY, 1, nullptr);
+    }
+    if (msg == DN_CTLCOLORDIALOG && param2) {
+        const intptr_t result = g_info.DefDlgProc ? g_info.DefDlgProc(dlg, msg, param1, param2) : 1;
+        CaptureBarColors(*static_cast<const FarColor*>(param2));
+        if (g_copyMeter) FillBarCells(*g_copyMeter);
+        return result;
+    }
+    if (msg == DN_CTLCOLORDLGITEM && param1 == 2) return 0;
+    if (msg == DN_DRAWDIALOG)
+        return g_info.DefDlgProc ? g_info.DefDlgProc(dlg, msg, param1, param2) : 1;
+    if (msg == DN_BTNCLICK && param1 == 5) {
+        g_copyCancel = true;
+        if (g_copyMeter) g_copyMeter->cancelled = true;
+        return 1;
+    }
+    if ((msg == DN_INPUT || msg == DN_CONTROLINPUT) && param2 &&
+        IsKeyDown(*static_cast<const INPUT_RECORD*>(param2), VK_ESCAPE)) {
+        g_copyCancel = true;
+        if (g_copyMeter) g_copyMeter->cancelled = true;
+        return msg == DN_INPUT ? 0 : 1;
+    }
+    if (msg == DN_CLOSE && param1 >= 0) {
+        g_copyCancel = true;
+        if (g_copyMeter) g_copyMeter->cancelled = true;
+        return 0;
+    }
+    if (g_info.DefDlgProc) return g_info.DefDlgProc(dlg, msg, param1, param2);
+    return 1;
+}
+
+std::wstring FormatBytes(unsigned long long n) {
+    wchar_t buf[64]{};
+    if (n < 1024)
+        swprintf_s(buf, L"%llu Б", n);
+    else if (n < 1024ull * 1024)
+        swprintf_s(buf, L"%.1f КБ", static_cast<double>(n) / 1024.0);
+    else if (n < 1024ull * 1024 * 1024)
+        swprintf_s(buf, L"%.1f МБ", static_cast<double>(n) / (1024.0 * 1024.0));
+    else
+        swprintf_s(buf, L"%.2f ГБ", static_cast<double>(n) / (1024.0 * 1024.0 * 1024.0));
+    return buf;
+}
+
+void PaintCopyDlg(CopyMeter& meter, bool force) {
+    PollCopyCancel(meter);
+    const DWORD now = GetTickCount();
+    if (!force && now - g_copyTick < 80) return;
+    g_copyTick = now;
+    if (meter.total > 0)
+        g_copyStats = FormatBytes(meter.done) + L" / " + FormatBytes(meter.total);
+    else
+        g_copyStats = FormatBytes(meter.done);
+    FillBarCells(meter);
+    if (g_copyDlg && g_copyDlg != INVALID_HANDLE_VALUE && g_info.SendDlgMessage) {
+        g_info.SendDlgMessage(g_copyDlg, DM_SETTEXTPTR, 1, const_cast<wchar_t*>(g_copyFile.c_str()));
+        g_info.SendDlgMessage(g_copyDlg, DM_SETTEXTPTR, 3, const_cast<wchar_t*>(g_copyStats.c_str()));
+        g_info.SendDlgMessage(g_copyDlg, DM_REDRAW, 0, nullptr);
+    }
+    if (!g_info.AdvControl) return;
+    if (meter.total == 0) {
+        g_info.AdvControl(MainGuid, ACTL_SETPROGRESSSTATE, 1, nullptr);
+        g_info.AdvControl(MainGuid, ACTL_PROGRESSNOTIFY, 0, nullptr);
+        return;
+    }
+    ProgressValue value{sizeof(value), meter.done, meter.total};
+    g_info.AdvControl(MainGuid, ACTL_SETPROGRESSVALUE, 0, &value);
+    g_info.AdvControl(MainGuid, ACTL_PROGRESSNOTIFY, 0, nullptr);
+}
+
+void CopyMeterBegin(CopyMeter& meter) {
+    CopyMeterEnd();
+    meter.cancelled = false;
+    g_copyCancel = false;
+    g_copyMeter = &meter;
+    g_copyFile = L"…";
+    g_copyTick = 0;
+    if (g_info.AdvControl)
+        g_info.AdvControl(MainGuid, ACTL_SETPROGRESSSTATE, meter.total == 0 ? 1 : 2, nullptr);
+    if (meter.silent || !g_info.DialogInit) {
+        PaintCopyDlg(meter, true);
+        return;
+    }
+    InitBarColors();
+    FillBarCells(meter);
+    FarDialogItem items[6]{};
+    farform::FillBox(items[0], farform::kWidth, kCopyDlgH, L" Копирование ");
+    farform::FillLabel(items[1], 2, g_copyFile.c_str());
+    items[1].X2 = farform::kInnerR;
+    items[1].Flags = DIF_SHOWAMPERSAND;
+    items[2] = {};
+    items[2].Type = DI_USERCONTROL;
+    items[2].X1 = farform::kLabelX;
+    items[2].Y1 = 3;
+    items[2].X2 = farform::kInnerR;
+    items[2].Y2 = 3;
+    items[2].Param.VBuf = g_copyCells;
+    items[2].Flags = DIF_NOFOCUS;
+    farform::FillLabel(items[3], 4, L"");
+    items[3].X2 = farform::kInnerR;
+    farform::FillSeparator(items[4], 5);
+    farform::FillButton(items[5], 7, L"Отмена", false);
+    items[5].Flags |= DIF_FOCUS;
+    g_copyDlg = g_info.DialogInit(MainGuid, ProgressGuid, -1, -1, farform::kWidth, kCopyDlgH, nullptr, items, 6, 0,
+                                  FDLG_SMALLDIALOG | FDLG_NONMODAL | FDLG_KEEPCONSOLETITLE, CopyDlgProc, 0);
+    if (g_copyDlg && g_copyDlg != INVALID_HANDLE_VALUE) {
+        if (g_info.DialogRun) g_info.DialogRun(g_copyDlg);
+        if (g_info.SendDlgMessage) g_info.SendDlgMessage(g_copyDlg, DM_SHOWDIALOG, 1, nullptr);
+    }
+    PaintCopyDlg(meter, true);
+}
+
+void CopyMeterFile(CopyMeter& meter, const wchar_t* name) {
+    g_copyFile = name ? name : L"";
+    const auto slash = g_copyFile.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) g_copyFile = g_copyFile.substr(slash + 1);
+    if (g_copyFile.empty()) g_copyFile = L"…";
+    g_copyFile = FitCopyName(std::move(g_copyFile));
+    PaintCopyDlg(meter, true);
+}
+
+void CopyMeterAdd(CopyMeter& meter, unsigned long long bytes) {
+    meter.done += bytes;
+    PaintCopyDlg(meter, false);
+}
+
+bool CopyMeterAborted(CopyMeter* meter, std::wstring& error) {
+    if (!meter) return false;
+    PollCopyCancel(*meter);
+    if (!meter->cancelled) return false;
+    error = L"Копирование прервано.";
+    return true;
+}
+
+void CopyMeterEnd() {
+    g_copyMeter = nullptr;
+    if (g_copyDlg && g_copyDlg != INVALID_HANDLE_VALUE) {
+        if (g_info.SendDlgMessage) g_info.SendDlgMessage(g_copyDlg, DM_CLOSE, -1, nullptr);
+        if (g_info.DialogFree) g_info.DialogFree(g_copyDlg);
+    }
+    g_copyDlg = nullptr;
+    g_copyCancel = false;
+    if (g_info.AdvControl)
+        g_info.AdvControl(MainGuid, ACTL_SETPROGRESSSTATE, 0, nullptr);
+}
+
+void NormalizePem(std::string& pem) {
+    if (pem.size() >= 3 &&
+        static_cast<unsigned char>(pem[0]) == 0xEF &&
+        static_cast<unsigned char>(pem[1]) == 0xBB &&
+        static_cast<unsigned char>(pem[2]) == 0xBF) {
+        pem.erase(0, 3);
+    }
+    std::string out;
+    out.reserve(pem.size());
+    for (char ch : pem) {
+        if (ch != '\r') out.push_back(ch);
+    }
+    if (out.find("BEGIN") != std::string::npos && out.find('\n') == std::string::npos) {
+        std::string unesc;
+        unesc.reserve(out.size());
+        for (size_t i = 0; i < out.size(); ++i) {
+            if (out[i] == '\\' && i + 1 < out.size()) {
+                if (out[i + 1] == 'n') { unesc.push_back('\n'); ++i; continue; }
+                if (out[i + 1] == 'r') { ++i; continue; }
+            }
+            unesc.push_back(out[i]);
+        }
+        out.swap(unesc);
+    }
+    pem.swap(out);
+}
+
+bool LooksLikePublicOnly(const std::string& pem) {
+    size_t i = 0;
+    while (i < pem.size() && (pem[i] == ' ' || pem[i] == '\t' || pem[i] == '\n')) ++i;
+    const char* prefixes[] = {"ssh-rsa", "ssh-ed25519", "ssh-dss", "ecdsa-sha2", "sk-ssh-", "sk-ecdsa-"};
+    for (const char* prefix : prefixes) {
+        const size_t n = strlen(prefix);
+        if (pem.size() - i >= n && pem.compare(i, n, prefix) == 0) return true;
+    }
+    return false;
+}
+
+void WipeTempKey(const std::wstring& path) {
+    if (path.empty()) return;
+    DeleteFileW(path.c_str());
+    DeleteFileW((path + L".pub").c_str());
+}
+
+std::string PublicFromSshKeygen(const std::wstring& path) {
+    if (path.empty() || !FileExists(path)) return {};
+    const std::wstring ssh = FindSshExe();
+    if (ssh.empty()) return {};
+    std::wstring keygen = ssh;
+    const auto slash = keygen.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) keygen.replace(slash + 1, std::wstring::npos, L"ssh-keygen.exe");
+    else keygen = L"ssh-keygen.exe";
+    if (!FileExists(keygen)) return {};
+    SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
+    HANDLE read = nullptr, write = nullptr;
+    if (!CreatePipe(&read, &write, &security, 0)) return {};
+    SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = write;
+    si.hStdError = write;
+    PROCESS_INFORMATION pi{};
+    std::wstring command = QuoteArg(keygen) + L" -y -f " + QuoteArg(path) + L" -P \"\"";
+    std::vector<wchar_t> line(command.begin(), command.end());
+    line.push_back(L'\0');
+    if (!CreateProcessW(nullptr, line.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(read);
+        CloseHandle(write);
+        return {};
+    }
+    CloseHandle(write);
+    CloseHandle(pi.hThread);
+    std::string out;
+    char buf[1024];
+    DWORD n = 0;
+    while (ReadFile(read, buf, sizeof(buf), &n, nullptr) && n > 0) out.append(buf, n);
+    CloseHandle(read);
+    WaitForSingleObject(pi.hProcess, 4000);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    if (code != 0) return {};
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    return out;
+}
+
+std::string ReadKeyBytes(const std::wstring& path);
+
+std::wstring PrepareIdentityFile(const std::wstring& path) {
+    if (path.empty() || !FileExists(path)) return L"Нет файла ключа.";
+    std::string pem = ReadKeyBytes(path);
+    NkNormalizePem(pem);
+    if (pem.empty()) return L"Ключ из vault пустой.";
+    if (LooksLikePublicOnly(pem)) return L"В vault лежит публичный ключ, нужен приватный.";
+    if (pem.find("-----BEGIN ") == std::string::npos) {
+        std::string first;
+        for (char ch : pem) {
+            if (ch == '\n' || ch == '\r') break;
+            first.push_back(ch);
+            if (first.size() >= 48) break;
+        }
+        std::wstring error = L"В vault не OpenSSH PEM.";
+        if (!first.empty()) error += L" Начало: " + Wide(first.c_str());
+        return error;
+    }
+    if (!NkWriteSecureFile(path, pem.data(), pem.size()))
+        return L"Не удалось записать временный ключ.";
+    DeleteFileW((path + L".pub").c_str());
+    NkRestrictToCurrentUser(path);
+    return {};
+}
+
+bool TryKeyMemory(void* sessionPtr, const std::string& user, const std::string& pem, const std::string& pub,
+                  const char* pass) {
+    if (!sessionPtr || pem.empty()) return false;
+    auto* session = static_cast<LIBSSH2_SESSION*>(sessionPtr);
+    const char* pubPtr = pub.empty() ? nullptr : pub.c_str();
+    const size_t pubLen = pub.size();
+    const char* phrase = pass ? pass : "";
+    if (libssh2_userauth_publickey_frommemory(session, user.c_str(), user.size(),
+                                              pubPtr, pubLen, pem.data(), pem.size(), phrase) == 0)
+        return true;
+    if (!pub.empty() &&
+        libssh2_userauth_publickey_frommemory(session, user.c_str(), user.size(),
+                                              nullptr, 0, pem.data(), pem.size(), phrase) == 0)
+        return true;
+    return false;
+}
+
+bool TryAgent(void* sessionPtr, const std::string& user) {
+    auto* session = static_cast<LIBSSH2_SESSION*>(sessionPtr);
+    if (!session || user.empty()) return false;
+    LIBSSH2_AGENT* agent = libssh2_agent_init(session);
+    if (!agent) return false;
+    bool ok = false;
+    if (libssh2_agent_connect(agent) == 0 && libssh2_agent_list_identities(agent) == 0) {
+        struct libssh2_agent_publickey* identity = nullptr;
+        struct libssh2_agent_publickey* prev = nullptr;
+        while (libssh2_agent_get_identity(agent, &identity, prev) == 0 && identity) {
+            if (libssh2_agent_userauth(agent, user.c_str(), identity) == 0) {
+                ok = true;
+                break;
+            }
+            prev = identity;
+        }
+        libssh2_agent_disconnect(agent);
+    }
+    libssh2_agent_free(agent);
+    return ok;
+}
+
+std::string ReadKeyBytes(const std::wstring& path) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return {};
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > 1 << 20) {
+        CloseHandle(file);
+        return {};
+    }
+    std::string out(static_cast<size_t>(size.QuadPart), '\0');
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, out.data(), static_cast<DWORD>(out.size()), &read, nullptr);
+    CloseHandle(file);
+    if (!ok) return {};
+    out.resize(read);
+    return out;
+}
+
 bool TryKeyFile(void* sessionPtr, const std::string& user, const std::wstring& key, const std::wstring& cert, bool wipe) {
     auto* session = static_cast<LIBSSH2_SESSION*>(sessionPtr);
     if (key.empty() || !FileExists(key)) return false;
-    const std::string path = Utf8(key);
-    const std::string pub = !cert.empty() && FileExists(cert) ? Utf8(cert) : std::string();
-    const char* publicKey = pub.empty() ? nullptr : pub.c_str();
-    int rc = libssh2_userauth_publickey_fromfile(session, user.c_str(), publicKey, path.c_str(), "");
-    if (rc == 0) {
-        if (wipe) DeleteFileW(key.c_str());
+    const std::string pem = ReadKeyBytes(key);
+    const std::string pubBytes = (!cert.empty() && FileExists(cert)) ? ReadKeyBytes(cert) : ReadKeyBytes(key + L".pub");
+    if (!pem.empty() && TryKeyMemory(session, user, pem, pubBytes, "")) {
+        if (wipe) WipeTempKey(key);
         return true;
     }
-    if (rc == LIBSSH2_ERROR_FILE) {
-        const std::wstring pass = AskText(L"Key passphrase", key.c_str(), true);
-        if (!pass.empty())
-            rc = libssh2_userauth_publickey_fromfile(session, user.c_str(), publicKey, path.c_str(), Utf8(pass).c_str());
+    const std::string path = Utf8(key);
+    const std::string pubPath = !cert.empty() && FileExists(cert) ? Utf8(cert) : std::string();
+    const char* publicKey = pubPath.empty() ? nullptr : pubPath.c_str();
+    int rc = libssh2_userauth_publickey_fromfile(session, user.c_str(), publicKey, path.c_str(), "");
+    if (rc == 0) {
+        if (wipe) WipeTempKey(key);
+        return true;
     }
-    if (wipe) DeleteFileW(key.c_str());
-    return rc == 0;
+    char* message = nullptr;
+    libssh2_session_last_error(session, &message, nullptr, 0);
+    const bool encrypted = rc == LIBSSH2_ERROR_FILE ||
+        (message && (strstr(message, "passphrase") || strstr(message, "decrypt") || strstr(message, "encrypted")));
+    if (encrypted) {
+        const std::wstring pass = AskText(L"Фраза ключа", key.c_str(), true);
+        if (!pass.empty()) {
+            const std::string passUtf8 = Utf8(pass);
+            if (TryKeyMemory(session, user, pem, pubBytes, passUtf8.c_str()) ||
+                libssh2_userauth_publickey_fromfile(session, user.c_str(), publicKey, path.c_str(), passUtf8.c_str()) == 0) {
+                if (wipe) WipeTempKey(key);
+                return true;
+            }
+        }
+    }
+    if (wipe) WipeTempKey(key);
+    return false;
 }
 
 bool SftpConnection::Authenticate(const StoredServer& server, std::wstring& error) {
     auto* session = static_cast<LIBSSH2_SESSION*>(session_);
     const std::string user = Utf8(server.user);
     if (!server.vaultKey.empty()) {
-        const std::wstring temp = VaultLookupKeyFile(server.vaultKey);
-        if (temp.empty()) {
+        std::wstring tempPath;
+        std::string pem;
+        std::string pub;
+        const std::wstring path = VaultLookupKeyFile(server.vaultKey);
+        if (!path.empty()) {
+            pem = ReadKeyBytes(path);
+            pub = ReadKeyBytes(path + L".pub");
+            tempPath = path;
+        }
+        if (pem.empty()) pem = Utf8(VaultLookupKeyPem(server.vaultKey));
+        if (pub.empty()) pub = Utf8(VaultLookupKeyPub(server.vaultKey));
+        NormalizePem(pem);
+        NormalizePem(pub);
+        if (pem.empty()) {
             error = L"Ключ не найден в Secret Vault / NoteKeeper: " + server.vaultKey;
             return false;
         }
-        if (TryKeyFile(session, user, temp, {}, true)) return true;
+        if (LooksLikePublicOnly(pem)) {
+            WipeTempKey(tempPath);
+            error = L"В vault лежит публичный ключ, нужен приватный: " + server.vaultKey;
+            return false;
+        }
+        if (pub.empty() && !tempPath.empty()) pub = PublicFromSshKeygen(tempPath);
+        if (TryKeyMemory(session, user, pem, pub, "")) {
+            WipeTempKey(tempPath);
+            return true;
+        }
+        if (!tempPath.empty() && TryKeyFile(session, user, tempPath, tempPath + L".pub", false)) {
+            WipeTempKey(tempPath);
+            return true;
+        }
+        char* message = nullptr;
+        libssh2_session_last_error(session, &message, nullptr, 0);
+        const bool encrypted = message && (strstr(message, "passphrase") || strstr(message, "decrypt") ||
+                                           strstr(message, "encrypted"));
+        if (encrypted) {
+            const std::wstring pass = AskText(L"Фраза ключа", server.vaultKey.c_str(), true);
+            if (!pass.empty() && TryKeyMemory(session, user, pem, pub, Utf8(pass).c_str())) {
+                WipeTempKey(tempPath);
+                return true;
+            }
+        }
+        WipeTempKey(tempPath);
+        const std::wstring prefix = L"Ключ из vault не принят для " + server.user + L"@" + server.host;
+        error = LastError(prefix.c_str());
+        return false;
     }
     if (server.fromTeleport) {
         if (TryKeyFile(session, user, TshIdentityFile(), TshCertificateFile(), false)) return true;
         if (TryKeyFile(session, user, TshIdentityFile(), {}, false)) return true;
+        error = LastError(L"Teleport: сертификат не принят. F6 — tsh login");
+        return false;
     }
     std::vector<std::wstring> keys = server.identityFiles;
     if (!server.keyFile.empty()) keys.insert(keys.begin(), server.keyFile);
-    if (keys.empty() && server.vaultKey.empty() && !server.fromTeleport) keys = DefaultIdentityFiles();
+    if (keys.empty()) keys = DefaultIdentityFiles();
     for (const auto& key : keys) {
         if (TryKeyFile(session, user, key, {}, false)) return true;
     }
-
-    if (server.fromTeleport) {
-        error = LastError(L"Teleport: сертификат не принят. F6 — tsh login");
+    if (!server.keyFile.empty()) {
+        error = LastError(L"Ключ не принят");
         return false;
     }
     std::wstring secret = server.password;
@@ -543,12 +1246,12 @@ bool SftpConnection::Authenticate(const StoredServer& server, std::wstring& erro
         secret = VaultLookupPasswordForHost(server.host, server.user);
     std::string password = Utf8(secret);
     if (password.empty()) {
-        const std::wstring typed = AskText(L"Password", server.host.c_str(), true);
+        const std::wstring typed = AskText(L"Пароль сервера", server.host.c_str(), true);
         password = Utf8(typed);
     }
     if (!password.empty() && libssh2_userauth_password(session, user.c_str(), password.c_str()) == 0)
         return true;
-    error = LastError(L"Authentication failed");
+    error = LastError(L"Нет входа по ключу и паролю");
     return false;
 }
 
@@ -584,7 +1287,7 @@ bool SftpConnection::PipeReadAll(void* data, size_t length, DWORD timeoutMs) {
 
 bool SftpConnection::PipeSftpRecv(uint8_t& type, uint32_t& id, std::string& payload, std::wstring& error) {
     uint8_t lenb[4];
-    if (!PipeReadAll(lenb, 4, 25000)) {
+    if (!PipeReadAll(lenb, 4, JumpTimeout())) {
         error = L"SFTP: нет ответа. F6 — tsh login, либо F2.";
         return false;
     }
@@ -595,7 +1298,7 @@ bool SftpConnection::PipeSftpRecv(uint8_t& type, uint32_t& id, std::string& payl
         return false;
     }
     std::string body(len, '\0');
-    if (!PipeReadAll(body.data(), len, 25000)) {
+    if (!PipeReadAll(body.data(), len, JumpTimeout())) {
         error = L"SFTP: пакет оборвался.";
         return false;
     }
@@ -724,16 +1427,25 @@ bool SftpConnection::Connect(const StoredServer& server, std::wstring& error) {
     const bool viaTsh = server.fromTeleport;
     const bool jump = !viaTsh && !server.proxy.empty();
     if (viaTsh) {
+        if (TshSftpPipe(server, error)) return true;
+        Close();
+        error.clear();
         if (!TshConnect(server, error)) return false;
-        if (!PipeSftpInit(error)) {
-            Close();
+    } else if (OpenSshSftpPipe(server, error)) {
+        return true;
+    } else {
+        const bool exclusive = ExclusiveKey(server);
+        Close();
+        if (exclusive) {
+            if (error.empty()) error = L"SFTP: ключ из vault не принят.";
             return false;
         }
-        return true;
-    } else if (jump) {
-        if (!JumpConnect(server, error)) return false;
-    } else if (!TcpConnect(host, port, error)) {
-        return false;
+        error.clear();
+        if (jump) {
+            if (!JumpConnect(server, error)) return false;
+        } else if (!TcpConnect(host, port, error)) {
+            return false;
+        }
     }
 
     session_ = libssh2_session_init();
@@ -745,7 +1457,7 @@ bool SftpConnection::Connect(const StoredServer& server, std::wstring& error) {
     auto* session = static_cast<LIBSSH2_SESSION*>(session_);
     *libssh2_session_abstract(session) = this;
     libssh2_session_set_blocking(session, 1);
-    libssh2_session_set_timeout(session, viaTsh ? 60000 : 20000);
+    libssh2_session_set_timeout(session, viaTsh ? 90000 : 20000);
     if (jump || viaTsh) {
         if (sock_ == INVALID_SOCKET)
             sock_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -882,15 +1594,18 @@ bool SftpConnection::List(const std::string& path, std::vector<RemoteEntry>& out
     return true;
 }
 
-bool SftpConnection::Download(const std::string& remote, const std::wstring& local, bool directory, std::wstring& error) {
+bool SftpConnection::Download(const std::string& remote, const std::wstring& local, bool directory, std::wstring& error,
+                              CopyMeter* meter) {
+    if (CopyMeterAborted(meter, error)) return false;
     if (pipeSftp_ && directory) {
         CreateDirectoryW(local.c_str(), nullptr);
         std::vector<RemoteEntry> entries;
         if (!List(remote, entries, error)) return false;
         for (const auto& entry : entries) {
+            if (CopyMeterAborted(meter, error)) return false;
             const std::string childRemote = (remote == "/" ? "/" : remote + "/") + Utf8(entry.name);
             const std::wstring childLocal = local + L"\\" + entry.name;
-            if (!Download(childRemote, childLocal, entry.directory, error)) return false;
+            if (!Download(childRemote, childLocal, entry.directory, error, meter)) return false;
         }
         return true;
     }
@@ -907,6 +1622,7 @@ bool SftpConnection::Download(const std::string& remote, const std::wstring& loc
             error = L"SFTP: нет handle файла.";
             return false;
         }
+        if (meter) CopyMeterFile(*meter, local.c_str());
         HANDLE localFile = CreateFileW(local.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (localFile == INVALID_HANDLE_VALUE) {
             std::wstring ignore;
@@ -938,10 +1654,16 @@ bool SftpConnection::Download(const std::string& remote, const std::wstring& loc
                 break;
             }
             offset += chunk.size();
+            if (meter) CopyMeterAdd(*meter, chunk.size());
+            if (CopyMeterAborted(meter, error)) {
+                ok = false;
+                break;
+            }
         }
         CloseHandle(localFile);
         std::wstring ignore;
         PipeSftpCloseHandle(handle, ignore);
+        if (!ok && meter && meter->cancelled) DeleteFileW(local.c_str());
         return ok;
     }
     auto* sftp = static_cast<LIBSSH2_SFTP*>(sftp_);
@@ -950,12 +1672,14 @@ bool SftpConnection::Download(const std::string& remote, const std::wstring& loc
         std::vector<RemoteEntry> entries;
         if (!List(remote, entries, error)) return false;
         for (const auto& entry : entries) {
+            if (CopyMeterAborted(meter, error)) return false;
             const std::string childRemote = (remote == "/" ? "/" : remote + "/") + Utf8(entry.name);
             const std::wstring childLocal = local + L"\\" + entry.name;
-            if (!Download(childRemote, childLocal, entry.directory, error)) return false;
+            if (!Download(childRemote, childLocal, entry.directory, error, meter)) return false;
         }
         return true;
     }
+    if (meter) CopyMeterFile(*meter, local.c_str());
     LIBSSH2_SFTP_HANDLE* remoteFile = libssh2_sftp_open(sftp, remote.c_str(), LIBSSH2_FXF_READ, 0);
     if (!remoteFile) {
         error = LastError(L"Cannot download");
@@ -979,13 +1703,21 @@ bool SftpConnection::Download(const std::string& remote, const std::wstring& loc
             error = L"Cannot write local file.";
             break;
         }
+        if (meter) CopyMeterAdd(*meter, static_cast<unsigned long long>(got));
+        if (CopyMeterAborted(meter, error)) {
+            ok = false;
+            break;
+        }
     }
     CloseHandle(localFile);
     libssh2_sftp_close(remoteFile);
+    if (!ok && meter && meter->cancelled) DeleteFileW(local.c_str());
     return ok;
 }
 
-bool SftpConnection::Upload(const std::wstring& local, const std::string& remote, bool directory, std::wstring& error) {
+bool SftpConnection::Upload(const std::wstring& local, const std::string& remote, bool directory, std::wstring& error,
+                            CopyMeter* meter) {
+    if (CopyMeterAborted(meter, error)) return false;
     if (pipeSftp_) {
         const DWORD attr = GetFileAttributesW(local.c_str());
         const bool isDir = directory || (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
@@ -997,10 +1729,14 @@ bool SftpConnection::Upload(const std::wstring& local, const std::string& remote
             if (search == INVALID_HANDLE_VALUE) return true;
             do {
                 if (wcscmp(found.cFileName, L".") == 0 || wcscmp(found.cFileName, L"..") == 0) continue;
+                if (CopyMeterAborted(meter, error)) {
+                    FindClose(search);
+                    return false;
+                }
                 const bool childDir = (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
                 const std::wstring childLocal = local + L"\\" + found.cFileName;
                 const std::string childRemote = (remote == "/" ? "/" : remote + "/") + Utf8(found.cFileName);
-                if (!Upload(childLocal, childRemote, childDir, error)) {
+                if (!Upload(childLocal, childRemote, childDir, error, meter)) {
                     FindClose(search);
                     return false;
                 }
@@ -1008,6 +1744,7 @@ bool SftpConnection::Upload(const std::wstring& local, const std::string& remote
             FindClose(search);
             return true;
         }
+        if (meter) CopyMeterFile(*meter, local.c_str());
         HANDLE localFile = CreateFileW(local.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (localFile == INVALID_HANDLE_VALUE) {
             error = L"Cannot open local file.";
@@ -1050,6 +1787,11 @@ bool SftpConnection::Upload(const std::wstring& local, const std::string& remote
                 break;
             }
             offset += read;
+            if (meter) CopyMeterAdd(*meter, read);
+            if (CopyMeterAborted(meter, error)) {
+                ok = false;
+                break;
+            }
         }
         CloseHandle(localFile);
         std::wstring ignore;
@@ -1066,10 +1808,14 @@ bool SftpConnection::Upload(const std::wstring& local, const std::string& remote
         if (search == INVALID_HANDLE_VALUE) return true;
         do {
             if (wcscmp(found.cFileName, L".") == 0 || wcscmp(found.cFileName, L"..") == 0) continue;
+            if (CopyMeterAborted(meter, error)) {
+                FindClose(search);
+                return false;
+            }
             const bool childDir = (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
             const std::wstring childLocal = local + L"\\" + found.cFileName;
             const std::string childRemote = (remote == "/" ? "/" : remote + "/") + Utf8(found.cFileName);
-            if (!Upload(childLocal, childRemote, childDir, error)) {
+            if (!Upload(childLocal, childRemote, childDir, error, meter)) {
                 FindClose(search);
                 return false;
             }
@@ -1077,6 +1823,7 @@ bool SftpConnection::Upload(const std::wstring& local, const std::string& remote
         FindClose(search);
         return true;
     }
+    if (meter) CopyMeterFile(*meter, local.c_str());
     HANDLE localFile = CreateFileW(local.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (localFile == INVALID_HANDLE_VALUE) {
         error = L"Cannot open local file.";
@@ -1104,6 +1851,11 @@ bool SftpConnection::Upload(const std::wstring& local, const std::string& remote
             const ssize_t wrote = libssh2_sftp_write(remoteFile, buffer + sent, read - sent);
             if (wrote < 0) { ok = false; error = LastError(L"Upload failed"); break; }
             sent += static_cast<size_t>(wrote);
+            if (meter) CopyMeterAdd(*meter, static_cast<unsigned long long>(wrote));
+            if (CopyMeterAborted(meter, error)) {
+                ok = false;
+                break;
+            }
         }
         if (!ok) break;
     }

@@ -1,6 +1,8 @@
 #ifndef SECRET_VAULT_VAULT_HPP_
 #define SECRET_VAULT_VAULT_HPP_
 
+#include <windows.h>
+
 #include <string>
 #include <vector>
 
@@ -11,6 +13,7 @@ struct PasswordRecord {
     std::wstring secret;
     std::wstring host;
     std::wstring note;
+    std::wstring updatedAt;
     int revision = 0;
 };
 
@@ -21,6 +24,7 @@ struct KeyRecord {
     std::wstring comment;
     std::wstring privateKey;
     std::wstring publicKey;
+    std::wstring updatedAt;
     int revision = 0;
 };
 
@@ -43,5 +47,6 @@ const KeyRecord* FindKey(const VaultData& data, const std::wstring& name);
 bool NameTaken(const VaultData& data, bool keys, const std::wstring& name, const std::wstring& exceptId);
 
 std::wstring WriteTempKey(const KeyRecord& key, std::wstring& error);
+bool VaultWriteTime(FILETIME* out);
 
 #endif

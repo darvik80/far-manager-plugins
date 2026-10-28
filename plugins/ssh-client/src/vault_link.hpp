@@ -10,6 +10,8 @@ std::vector<std::wstring> VaultNames(bool keys);
 std::wstring VaultLookupPassword(const std::wstring& name);
 std::wstring VaultLookupPasswordForHost(const std::wstring& host, const std::wstring& user);
 std::wstring VaultLookupKeyFile(const std::wstring& name);
+std::wstring VaultLookupKeyPem(const std::wstring& name);
+std::wstring VaultLookupKeyPub(const std::wstring& name);
 bool VaultStorePassword(const std::wstring& name, const std::wstring& secret);
 bool VaultStoreKeyFile(const std::wstring& name, const std::wstring& path);
 

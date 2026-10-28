@@ -18,6 +18,19 @@ struct RemoteEntry {
     unsigned long mtime = 0;
 };
 
+struct CopyMeter {
+    unsigned long long done = 0;
+    unsigned long long total = 0;
+    bool silent = false;
+    bool cancelled = false;
+};
+
+void CopyMeterBegin(CopyMeter& meter);
+void CopyMeterFile(CopyMeter& meter, const wchar_t* name);
+void CopyMeterAdd(CopyMeter& meter, unsigned long long bytes);
+bool CopyMeterAborted(CopyMeter* meter, std::wstring& error);
+void CopyMeterEnd();
+
 class SftpConnection {
 public:
     SftpConnection() = default;
@@ -28,8 +41,10 @@ public:
     bool Connect(const StoredServer& server, std::wstring& error);
     void Close();
     bool List(const std::string& path, std::vector<RemoteEntry>& out, std::wstring& error);
-    bool Download(const std::string& remote, const std::wstring& local, bool directory, std::wstring& error);
-    bool Upload(const std::wstring& local, const std::string& remote, bool directory, std::wstring& error);
+    bool Download(const std::string& remote, const std::wstring& local, bool directory, std::wstring& error,
+                  CopyMeter* meter = nullptr);
+    bool Upload(const std::wstring& local, const std::string& remote, bool directory, std::wstring& error,
+                CopyMeter* meter = nullptr);
     bool Mkdir(const std::string& path, std::wstring& error);
     bool Remove(const std::string& path, bool directory, std::wstring& error);
     bool Rename(const std::string& from, const std::string& to, std::wstring& error);
@@ -39,13 +54,18 @@ public:
     HANDLE JumpIn() const { return jumpIn_; }
     HANDLE JumpOut() const { return jumpOut_; }
     HANDLE JumpErr() const { return jumpErr_; }
+    DWORD JumpTimeout() const { return jumpWaitMs_; }
     bool WaitJumpData(DWORD timeoutMs) const;
+    void AppendJumpErr(const char* data, size_t n);
+    std::wstring TakeJumpErr();
 
 private:
     bool TcpConnect(const std::string& host, const std::string& port, std::wstring& error);
     bool PipeConnect(const std::wstring& command, std::wstring& error);
     bool JumpConnect(const StoredServer& server, std::wstring& error);
+    bool OpenSshSftpPipe(const StoredServer& server, std::wstring& error);
     bool TshConnect(const StoredServer& server, std::wstring& error);
+    bool TshSftpPipe(const StoredServer& server, std::wstring& error);
     bool CheckHostKey(const std::string& host, int port, std::wstring& error, bool viaTsh);
     bool Authenticate(const StoredServer& server, std::wstring& error);
     std::wstring LastError(const wchar_t* prefix) const;
@@ -68,6 +88,9 @@ private:
     bool closing_ = false;
     bool pipeSftp_ = false;
     uint32_t sftpNextId_ = 1;
+    DWORD jumpWaitMs_ = 25000;
+    std::wstring keyCleanup_;
+    std::string jumpErrText_;
 };
 
 void StartupNetwork();

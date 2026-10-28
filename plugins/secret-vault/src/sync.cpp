@@ -31,6 +31,7 @@ struct RemoteItem {
     std::wstring secret;
     std::wstring extraJson;
     std::wstring deletedAt;
+    std::wstring updatedAt;
     int revision = 1;
 };
 
@@ -236,6 +237,9 @@ bool ParseRemoteItem(const std::string& json, size_t& i, RemoteItem& item) {
     item.secret = FieldOr(fields, "secret");
     item.extraJson = FieldOr(fields, "extraJson");
     item.deletedAt = FieldOr(fields, "deletedAt");
+    item.updatedAt = FieldOr(fields, "updatedAt");
+    if (item.updatedAt.empty()) item.updatedAt = FieldOr(fields, "updated_at");
+    if (item.updatedAt.empty()) item.updatedAt = FieldOr(fields, "modifiedAt");
     item.revision = revision;
     return true;
 }
@@ -505,6 +509,7 @@ void ApplyRemote(VaultData& data, const RemoteItem& remote) {
         item.id = remote.id;
         item.name = remote.title;
         item.privateKey = remote.privateKey;
+        item.updatedAt = remote.updatedAt;
         item.revision = remote.revision;
         if (!remote.extraJson.empty()) {
             size_t i = 0;
@@ -533,6 +538,7 @@ void ApplyRemote(VaultData& data, const RemoteItem& remote) {
     item.host = remote.host.empty() ? remote.url : remote.host;
     item.secret = remote.password.empty() ? remote.secret : remote.password;
     item.note = remote.extraJson;
+    item.updatedAt = remote.updatedAt;
     item.revision = remote.revision;
     if (existing) *existing = std::move(item);
     else data.passwords.push_back(std::move(item));

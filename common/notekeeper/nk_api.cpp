@@ -59,6 +59,9 @@ NkVaultItem VaultFrom(const NkObject& obj) {
     item.password = obj.S("password");
     item.privateKey = obj.S("privateKey");
     item.secret = obj.S("secret");
+    item.updatedAt = obj.S("updatedAt");
+    if (item.updatedAt.empty()) item.updatedAt = obj.S("updated_at");
+    if (item.updatedAt.empty()) item.updatedAt = obj.S("modifiedAt");
     item.revision = obj.N("revision", 1);
     return item;
 }
@@ -155,7 +158,8 @@ bool HostMatch(const NkVaultItem& item, const std::wstring& host) {
 std::wstring WriteTempPem(const std::wstring& pem, std::wstring& error) {
     const std::wstring path = NkSecureTempPath(L"FarNoteKeeper", L"key", L".pem", error);
     if (path.empty()) return {};
-    const std::string bytes = NkUtf8(pem);
+    std::string bytes = NkUtf8(pem);
+    NkNormalizePem(bytes);
     if (!NkWriteSecureFile(path, bytes.data(), bytes.size())) {
         error = L"Не удалось записать временный ключ.";
         DeleteFileW(path.c_str());
@@ -184,12 +188,20 @@ bool NkTestConnection(const NkSettings& settings, const wchar_t* apiPath, std::w
     const std::wstring path = (apiPath && apiPath[0]) ? apiPath : L"/vault/items";
     const NkHttpResult res = NkRequest(L"GET", base + L"/api/v1" + path, settings.token);
     if (res.status == 200) return true;
+    const bool notes = path.find(L"/notes") != std::wstring::npos;
+    const bool todos = path.find(L"/todo") != std::wstring::npos;
+    if ((res.status == 403 || res.status == 404) && (notes || todos)) {
+        std::string payload;
+        std::wstring mcpError;
+        if (notes && McpTool(settings, "list_notes", "{}", payload, mcpError)) return true;
+        if (todos && McpTool(settings, "list_todos", "{}", payload, mcpError)) return true;
+    }
     error = L"Нет связи с NoteKeeper";
     if (res.status == 401) error += L" — неверный PAT.";
     else if (res.status == 403) {
         if (path.find(L"vault") != std::wstring::npos) error += L" — в PAT нет scope vault.";
-        else if (path.find(L"todo") != std::wstring::npos) error += L" — в PAT нет scope todos.";
-        else if (path.find(L"note") != std::wstring::npos) error += L" — в PAT нет scope notes.";
+        else if (todos) error += L" — в PAT нет scope todos (и MCP тоже молчит).";
+        else if (notes) error += L" — в PAT нет scope notes (и MCP тоже молчит).";
         else error += L" — у PAT нет нужного scope.";
     } else if (res.status > 0) {
         error += L" (" + std::to_wstring(res.status) + L").";
@@ -258,18 +270,24 @@ std::wstring NkLookupPasswordForHost(const std::wstring& host, const std::wstrin
     return fallback->password.empty() ? fallback->secret : fallback->password;
 }
 
-std::wstring NkLookupKeyFile(const std::wstring& title, std::wstring& error) {
+std::wstring NkLookupKeyPem(const std::wstring& title, std::wstring& error) {
     if (title.empty()) return {};
     std::vector<NkVaultItem> items;
     if (!NkListVaultItems(items, error)) return {};
     const std::wstring key = NkLower(title);
     for (const auto& item : items) {
         if (NkLower(item.title) != key) continue;
-        if (item.privateKey.empty()) continue;
-        return WriteTempPem(item.privateKey, error);
+        if (!item.privateKey.empty()) return item.privateKey;
     }
     error = L"Ключ не найден в NoteKeeper vault: " + title;
     return {};
+}
+
+std::wstring NkLookupKeyFile(const std::wstring& title, std::wstring& error) {
+    const std::wstring pem = NkLookupKeyPem(title, error);
+    if (pem.empty()) return {};
+    error.clear();
+    return WriteTempPem(pem, error);
 }
 
 bool NkStorePassword(const std::wstring& title, const std::wstring& secret, const std::wstring& host,

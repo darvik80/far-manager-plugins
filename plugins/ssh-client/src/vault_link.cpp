@@ -125,6 +125,19 @@ std::wstring VaultLookupKeyFile(const std::wstring& name) {
     return NkLookupKeyFile(name, error);
 }
 
+std::wstring VaultLookupKeyPem(const std::wstring& name) {
+    if (name.empty()) return {};
+    const std::wstring local = VaultCall(L"lookup", L"pem", name);
+    if (!local.empty()) return local;
+    std::wstring error;
+    return NkLookupKeyPem(name, error);
+}
+
+std::wstring VaultLookupKeyPub(const std::wstring& name) {
+    if (name.empty()) return {};
+    return VaultCall(L"lookup", L"pub", name);
+}
+
 bool VaultStorePassword(const std::wstring& name, const std::wstring& secret) {
     if (name.empty() || secret.empty()) return false;
     if (!VaultCall(L"store", L"password", name, secret).empty()) return true;

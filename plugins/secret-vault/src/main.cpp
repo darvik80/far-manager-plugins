@@ -100,6 +100,14 @@ HANDLE HandleMacro(const OpenInfo* info) {
     if (verb == L"lookup") {
         const std::wstring kind = Lower(MacroString(macro, 2));
         const std::wstring name = MacroString(macro, 3);
+        if (kind == L"pem") {
+            const auto* item = FindKey(data, name);
+            return ReplyString(item ? item->privateKey : L"");
+        }
+        if (kind == L"pub") {
+            const auto* item = FindKey(data, name);
+            return ReplyString(item ? item->publicKey : L"");
+        }
         if (kind == L"key") {
             const auto* item = FindKey(data, name);
             if (!item) return ReplyString(L"");
@@ -121,9 +129,11 @@ HANDLE HandleMacro(const OpenInfo* info) {
                 created.id = NewRecordId();
                 created.name = name;
                 created.privateKey = secret;
+                created.updatedAt = IsoUtcNow();
                 data.keys.push_back(std::move(created));
             } else if (!secret.empty()) {
                 item->privateKey = secret;
+                item->updatedAt = IsoUtcNow();
             }
         } else {
             PasswordRecord* item = FindPassword(data, name);
@@ -132,9 +142,11 @@ HANDLE HandleMacro(const OpenInfo* info) {
                 created.id = NewRecordId();
                 created.name = name;
                 created.secret = secret;
+                created.updatedAt = IsoUtcNow();
                 data.passwords.push_back(std::move(created));
             } else if (!secret.empty()) {
                 item->secret = secret;
+                item->updatedAt = IsoUtcNow();
             }
         }
         SaveVault(data, error);
@@ -160,9 +172,9 @@ void WINAPI GetGlobalInfoW(GlobalInfo* info) {
     info->MinFarVersion.Build = FARMANAGERVERSION_BUILD;
     info->MinFarVersion.Stage = FARMANAGERVERSION_STAGE;
     info->Version.Major = 1;
-    info->Version.Minor = 1;
+    info->Version.Minor = 2;
     info->Version.Revision = 0;
-    info->Version.Build = 1;
+    info->Version.Build = 0;
     info->Version.Stage = VS_RELEASE;
     info->Guid = MainGuid;
     info->Title = L"Secret Vault";

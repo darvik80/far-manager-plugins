@@ -5,6 +5,8 @@
 
 Коллекция плагинов для **FAR Manager 3.0** — файловый менеджер для Windows.
 
+Пользовательское руководство со схемами экранов: [docs/user-guide.md](docs/user-guide.md).
+
 ---
 
 ## 📦 Плагины
@@ -79,8 +81,9 @@ IMAP-клиент для просмотра электронной почты п
 - Командная строка FAR: `ssh:`
 - На списке серверов: `F3` — карточка хоста, `F4` — изменить, `F7` или `Shift+F4` — новый, `F8` — удалить. Хосты из `tsh` и `~/.ssh/config` тоже открываются: у Teleport имя/адрес/порт только смотреть, логин и ключ можно сохранить поверх
 - `F2` или `Shift+Enter` — обычный SSH-терминал в отдельном окне (`tsh ssh` для Teleport, `ssh.exe` для остальных). Enter по-прежнему открывает SFTP
-- Если установлен `tsh`: `F6` — `tsh login --mfa-mode=otp` в отдельном окне (пароль и OTP, либо браузер/SSO). Ноды из `tsh ls` появляются в списке, вход идёт через `tsh proxy ssh`
-- В каталоге: `F5` — копировать, `F6` — переименовать, `F7` — папка, `F8` — удалить
+- Если установлен `tsh`: `F6` — `tsh login --mfa-mode=otp` в отдельном окне (пароль и OTP, либо браузер/SSO). Ноды из `tsh ls` появляются в списке. SFTP — `ssh.exe` через `tsh proxy ssh` (сертификат Teleport), запасной путь — libssh2 по тому же proxy
+- SFTP открывается тем же `ssh.exe`. Если в карточке указан ключ vault (или путь) — только он: `IdentitiesOnly=yes`, без агента и без `~/.ssh`. Иначе — агент и `~/.ssh/config`, как в консоли
+- В каталоге: `F5` — копировать (полоса прогресса), `F6` — переименовать, `F7` — папка, `F8` — удалить
 - Поля `Ключ vault` / `Пароль vault` — имена записей Secret Vault. Если локальный vault молчит, SSH берёт пароль/ключ из NoteKeeper vault (тот же URL+PAT). Если поле пустое — ищет запись по **точному** хосту (не подстроке)
 - Открытый пароль из старого `sessions.ini` при наличии хранилища переносится туда
 
@@ -127,6 +130,7 @@ IMAP-клиент для просмотра электронной почты п
 - Командная строка FAR: `nk:`
 - Настройки плагина: HTTPS URL (`https://note.example:8443`) и PAT со scopes `notes`, `todos` (SSH vault — ещё `vault`). `http://` только для localhost
 - `F3` — просмотр, `F4` — правка, `F7` / `Shift+F4` — создать, `F8` — удалить, `Alt+F9` — обновить
+- В Notes/Todos с другой панели (`F5`) копируются только `.md` и `.txt`
 
 ---
 
@@ -243,7 +247,8 @@ far-manager-plugins/
 │   └── luafar/            # общий host Lua-плагинов (luaplug)
 ├── cmake/
 │   └── LuaFarPlugin.cmake # add_luafar_plugin()
-├── sdk/                   # FAR Manager API headers
+├── sdk/                   # FAR Manager API headers (form.hpp — общий вид диалогов)
+├── docs/                  # user-guide.md и схемы экранов
 ├── .github/workflows/     # CI/CD (GitHub Actions)
 ├── CMakeLists.txt         # Основной CMake файл
 ├── build.bat              # Сборка всех плагинов
@@ -259,7 +264,7 @@ far-manager-plugins/
 - **HTTPS обязателен** для NoteKeeper/vault. Исключение: `http://127.0.0.1`, `localhost`, `::1`.
 - **SSH host match** — точное имя хоста (схема, порт и путь отбрасываются). Подстрока `evil.com` ⊂ `notevil.com` больше не срабатывает.
 - **Plugin.SyncCall** Secret Vault (`lookup` / `list` / `store`) принимает GUID только SSH Client.
-- **Временные ключи и F3-заметки** пишутся в `%TEMP%\FarVault` / `%TEMP%\FarNoteKeeper` с DACL «только текущий пользователь» и удаляются при закрытии панели / выходе из FAR.
+- **Временные ключи и F3-заметки** пишутся в `%APPDATA%\Far Manager\FarVault` / `FarNoteKeeper` с DACL «только текущий пользователь» и удаляются при закрытии панели / выходе из FAR.
 - **Синк vault**: сервер не затирает локальную запись с такой же или большей `revision`. Первый pull в уже непустой локальный vault — `Shift+Alt+F9`.
 
 IMAP-пароли Email Viewer по-прежнему в plaintext `%APPDATA%\Far Manager\EmailViewer.ini` — это отдельный плагин.

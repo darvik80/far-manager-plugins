@@ -16,6 +16,7 @@ struct NkVaultItem {
     std::wstring password;
     std::wstring privateKey;
     std::wstring secret;
+    std::wstring updatedAt;
     int revision = 1;
 };
 
@@ -51,6 +52,7 @@ bool NkListVaultItems(std::vector<NkVaultItem>& items, std::wstring& error);
 std::wstring NkLookupPassword(const std::wstring& title);
 std::wstring NkLookupPasswordForHost(const std::wstring& host, const std::wstring& user);
 std::wstring NkLookupKeyFile(const std::wstring& title, std::wstring& error);
+std::wstring NkLookupKeyPem(const std::wstring& title, std::wstring& error);
 bool NkStorePassword(const std::wstring& title, const std::wstring& secret, const std::wstring& host,
                      const std::wstring& user, std::wstring& error);
 bool NkStoreKey(const std::wstring& title, const std::wstring& pem, std::wstring& error);

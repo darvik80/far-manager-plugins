@@ -112,15 +112,81 @@ bool NkRestrictToCurrentUser(const std::wstring& path) {
     const DWORD err = SetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT,
                                             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                                             nullptr, nullptr, acl, nullptr);
+    if (err == ERROR_SUCCESS) {
+        SetNamedSecurityInfoW(const_cast<wchar_t*>(path.c_str()), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+                              user->User.Sid, nullptr, nullptr, nullptr);
+    }
     LocalFree(acl);
     return err == ERROR_SUCCESS;
 }
 
+void NkNormalizePem(std::string& pem) {
+    if (pem.size() >= 3 &&
+        static_cast<unsigned char>(pem[0]) == 0xEF &&
+        static_cast<unsigned char>(pem[1]) == 0xBB &&
+        static_cast<unsigned char>(pem[2]) == 0xBF) {
+        pem.erase(0, 3);
+    }
+    std::string out;
+    out.reserve(pem.size() + 8);
+    for (char ch : pem) {
+        if (ch != '\r') out.push_back(ch);
+    }
+    if (out.find("BEGIN") != std::string::npos && out.find('\n') == std::string::npos) {
+        std::string unesc;
+        unesc.reserve(out.size());
+        for (size_t i = 0; i < out.size(); ++i) {
+            if (out[i] == '\\' && i + 1 < out.size()) {
+                if (out[i + 1] == 'n') { unesc.push_back('\n'); ++i; continue; }
+                if (out[i + 1] == 'r') { ++i; continue; }
+            }
+            unesc.push_back(out[i]);
+        }
+        out.swap(unesc);
+    }
+    const auto begin = out.find("-----BEGIN ");
+    const auto endMark = out.find("-----END ");
+    if (begin != std::string::npos && endMark != std::string::npos && endMark > begin) {
+        auto headerEnd = out.find("-----", begin + 5);
+        auto footerEnd = out.find("-----", endMark + 5);
+        if (headerEnd != std::string::npos && footerEnd != std::string::npos) {
+            headerEnd += 5;
+            footerEnd += 5;
+            const bool oneLine = out.find('\n', begin) > endMark || out.find('\n', begin) == std::string::npos;
+            if (oneLine) {
+                std::string header = out.substr(begin, headerEnd - begin);
+                std::string footer = out.substr(endMark, footerEnd - endMark);
+                std::string b64;
+                for (size_t i = headerEnd; i < endMark; ++i) {
+                    const unsigned char ch = static_cast<unsigned char>(out[i]);
+                    if (ch != ' ' && ch != '\n' && ch != '\t') b64.push_back(out[i]);
+                }
+                if (!b64.empty()) {
+                    std::string wrapped = header;
+                    wrapped += '\n';
+                    for (size_t i = 0; i < b64.size(); i += 70) {
+                        wrapped.append(b64, i, b64.size() - i < 70 ? b64.size() - i : 70);
+                        wrapped += '\n';
+                    }
+                    wrapped += footer;
+                    wrapped += '\n';
+                    out.swap(wrapped);
+                }
+            }
+        }
+    }
+    if (!out.empty() && out.back() != '\n') out += '\n';
+    pem.swap(out);
+}
+
 std::wstring NkSecureTempDir(const wchar_t* leaf) {
-    wchar_t temp[MAX_PATH]{};
-    if (!GetTempPathW(MAX_PATH, temp)) return {};
-    std::wstring dir = temp;
-    if (dir.empty() || dir.back() != L'\\') dir += L'\\';
+    wchar_t app[MAX_PATH]{};
+    if (!GetEnvironmentVariableW(L"APPDATA", app, MAX_PATH) || !app[0]) return {};
+    std::wstring dir = app;
+    if (dir.back() != L'\\') dir += L'\\';
+    dir += L"Far Manager";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    dir += L'\\';
     dir += (leaf && *leaf) ? leaf : L"FarNoteKeeper";
     CreateDirectoryW(dir.c_str(), nullptr);
     NkRestrictToCurrentUser(dir);
@@ -155,14 +221,19 @@ std::wstring NkSecureTempPath(const wchar_t* leaf, const wchar_t* prefix, const 
 }
 
 bool NkWriteSecureFile(const std::wstring& path, const void* data, size_t size) {
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                              FILE_ATTRIBUTE_TEMPORARY, nullptr);
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
-    NkRestrictToCurrentUser(path);
     DWORD written = 0;
     const BOOL ok = (size == 0) || WriteFile(file, data, static_cast<DWORD>(size), &written, nullptr);
+    FlushFileBuffers(file);
     CloseHandle(file);
-    return ok && written == size;
+    if (!ok || written != size) {
+        DeleteFileW(path.c_str());
+        return false;
+    }
+    NkRestrictToCurrentUser(path);
+    return true;
 }
 
 void NkWipeTempPrefix(const wchar_t* leaf, const wchar_t* prefix) {

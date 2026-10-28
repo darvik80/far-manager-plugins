@@ -1,6 +1,6 @@
 #include "ui.hpp"
 #include "guid.hpp"
-#include "far/dialog.hpp"
+#include "far/form.hpp"
 #include "nk_api.hpp"
 
 #include <vector>
@@ -9,76 +9,9 @@ PluginStartupInfo g_info{};
 
 namespace {
 
-bool g_eatHotkey = false;
-bool g_seenHotkey = false;
-intptr_t g_cancelId = -1;
-
-bool IsKeyEvent(WORD eventType) {
-    return (eventType & 0x7FFF) == KEY_EVENT;
-}
-
-bool IsLeftoverHotkey(WORD vk) {
-    return vk == VK_RETURN || vk == VK_F4 || vk == VK_F7;
-}
-
-bool IsLeftoverKey(const void* param2) {
-    if (!param2) return false;
-    const auto* rec = static_cast<const INPUT_RECORD*>(param2);
-    if (!IsKeyEvent(rec->EventType) || !rec->Event.KeyEvent.bKeyDown) return false;
-    return IsLeftoverHotkey(rec->Event.KeyEvent.wVirtualKeyCode);
-}
-
-bool HotkeysAreUp() {
-    return !(GetAsyncKeyState(VK_F4) & 0x8000) &&
-           !(GetAsyncKeyState(VK_F7) & 0x8000) &&
-           !(GetAsyncKeyState(VK_RETURN) & 0x8000);
-}
-
-void DrainLeftoverHotkeys() {
-    for (int i = 0; i < 40 && !HotkeysAreUp(); ++i)
-        Sleep(15);
-    HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
-    if (!input || input == INVALID_HANDLE_VALUE) return;
-    for (int i = 0; i < 64; ++i) {
-        INPUT_RECORD rec{};
-        DWORD count = 0;
-        if (!PeekConsoleInputW(input, &rec, 1, &count) || count == 0) break;
-        if (!IsKeyEvent(rec.EventType) || !IsLeftoverHotkey(rec.Event.KeyEvent.wVirtualKeyCode))
-            break;
-        DWORD read = 0;
-        if (!ReadConsoleInputW(input, &rec, 1, &read) || read == 0) break;
-    }
-}
-
-intptr_t WINAPI GuardDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
-    if (msg == DN_INITDIALOG) {
-        g_eatHotkey = true;
-        g_seenHotkey = false;
-        g_cancelId = reinterpret_cast<intptr_t>(param2);
-        if (g_info.SendDlgMessage)
-            g_info.SendDlgMessage(dlg, DM_SETINPUTNOTIFY, 1, nullptr);
-    }
-    if (msg == DN_BTNCLICK)
-        g_eatHotkey = false;
-    if (g_eatHotkey && (msg == DN_INPUT || msg == DN_CONTROLINPUT) && IsLeftoverKey(param2)) {
-        g_seenHotkey = true;
-        return msg == DN_INPUT ? 0 : 1;
-    }
-    if (g_eatHotkey && g_seenHotkey && HotkeysAreUp())
-        g_eatHotkey = false;
-    if (msg == DN_CLOSE && g_eatHotkey && param1 >= 0 && param1 != g_cancelId)
-        return 0;
-    if (g_info.DefDlgProc)
-        return g_info.DefDlgProc(dlg, msg, param1, param2);
-    return 1;
-}
-
 HANDLE OpenGuardedDialog(FarDialogItem* items, size_t count, intptr_t width, intptr_t height,
                          intptr_t cancelId, const GUID& dialogId = DialogGuid) {
-    HANDLE dialog = FarOpenDialog(g_info, MainGuid, dialogId, items, count, width, height);
-    if ((!dialog || dialog == INVALID_HANDLE_VALUE) && g_info.DefDlgProc)
-        dialog = FarOpenDialog(g_info, MainGuid, dialogId, items, count, width, height, GuardDlgProc, cancelId);
-    return dialog;
+    return farform::OpenGuarded(g_info, MainGuid, dialogId, items, count, width, height, cancelId);
 }
 
 }  // namespace
@@ -96,43 +29,7 @@ bool AskYes(const wchar_t* text) {
 }
 
 std::wstring AskText(const wchar_t* title, const wchar_t* prompt, bool password) {
-    if (!g_info.DialogInit || !g_info.DialogRun || !g_info.DialogFree) return {};
-    FarDialogItem items[4]{};
-    items[0].Type = DI_DOUBLEBOX;
-    items[0].X1 = 0;
-    items[0].Y1 = 0;
-    items[0].X2 = 55;
-    items[0].Y2 = 6;
-    items[0].Data = title;
-    items[1].Type = DI_TEXT;
-    items[1].X1 = 2;
-    items[1].Y1 = 2;
-    items[1].X2 = 52;
-    items[1].Y2 = 2;
-    items[1].Data = prompt;
-    items[2].Type = password ? DI_PSWEDIT : DI_EDIT;
-    items[2].X1 = 2;
-    items[2].Y1 = 3;
-    items[2].X2 = 52;
-    items[2].Y2 = 3;
-    items[2].Data = L"";
-    items[3].Type = DI_BUTTON;
-    items[3].X1 = 22;
-    items[3].Y1 = 5;
-    items[3].X2 = 32;
-    items[3].Y2 = 5;
-    items[3].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
-    items[3].Data = L"OK";
-    HANDLE dialog = OpenGuardedDialog(items, 4, 56, 7, -1);
-    if (!dialog || dialog == INVALID_HANDLE_VALUE) return {};
-    const intptr_t result = g_info.DialogRun(dialog);
-    std::wstring text;
-    if (result == 3 && g_info.SendDlgMessage) {
-        const wchar_t* value = reinterpret_cast<const wchar_t*>(g_info.SendDlgMessage(dialog, 63, 2, nullptr));
-        if (value) text = value;
-    }
-    g_info.DialogFree(dialog);
-    return text;
+    return farform::AskText(g_info, MainGuid, DialogGuid, title, prompt, password);
 }
 
 intptr_t Pick(const wchar_t* title, const std::vector<std::wstring>& lines) {
@@ -152,79 +49,37 @@ bool CreateKey(KeyRecord& item, std::wstring& kind) {
     wcsncpy_s(comment, item.comment.c_str(), _TRUNCATE);
 
     FarDialogItem items[12]{};
-    items[0].Type = DI_DOUBLEBOX;
-    items[0].X1 = 0;
-    items[0].Y1 = 0;
-    items[0].X2 = 58;
-    items[0].Y2 = 14;
-    items[0].Data = L" Новый ключ ";
-
-    items[1].Type = DI_TEXT;
-    items[1].X1 = 2;
-    items[1].Y1 = 2;
-    items[1].Data = L"Имя:";
-    items[2].Type = DI_EDIT;
-    items[2].X1 = 14;
-    items[2].Y1 = 2;
-    items[2].X2 = 56;
-    items[2].Y2 = 2;
-    items[2].Data = name;
-    items[2].MaxLength = 127;
-    items[2].Flags = DIF_FOCUS;
-
-    items[3].Type = DI_TEXT;
-    items[3].X1 = 2;
-    items[3].Y1 = 4;
-    items[3].Data = L"Коммент:";
-    items[4].Type = DI_EDIT;
-    items[4].X1 = 14;
-    items[4].Y1 = 4;
-    items[4].X2 = 56;
-    items[4].Y2 = 4;
-    items[4].Data = comment;
-    items[4].MaxLength = 255;
-
-    items[5].Type = DI_TEXT;
-    items[5].X1 = 2;
-    items[5].Y1 = 6;
-    items[5].Data = L"Тип:";
-
+    farform::FillBox(items[0], farform::kWidth, 15, L" Новый ключ ");
+    farform::FillLabel(items[1], 2, L"Имя:");
+    farform::FillEdit(items[2], 2, farform::kEditX, farform::kInnerR, name, 127, false, DIF_FOCUS);
+    farform::FillLabel(items[3], 4, L"Коммент:");
+    farform::FillEdit(items[4], 4, farform::kEditX, farform::kInnerR, comment, 255, false);
+    farform::FillLabel(items[5], 6, L"Тип:");
+    items[6] = {};
     items[6].Type = DI_RADIOBUTTON;
-    items[6].X1 = 14;
+    items[6].X1 = farform::kEditX;
     items[6].Y1 = 6;
-    items[6].X2 = 56;
+    items[6].X2 = farform::kInnerR;
     items[6].Flags = DIF_GROUP;
     items[6].Param.Selected = 1;
     items[6].Data = L"создать ed25519";
-
+    items[7] = {};
     items[7].Type = DI_RADIOBUTTON;
-    items[7].X1 = 14;
+    items[7].X1 = farform::kEditX;
     items[7].Y1 = 7;
-    items[7].X2 = 56;
+    items[7].X2 = farform::kInnerR;
     items[7].Data = L"создать RSA 3072";
-
+    items[8] = {};
     items[8].Type = DI_RADIOBUTTON;
-    items[8].X1 = 14;
+    items[8].X1 = farform::kEditX;
     items[8].Y1 = 8;
-    items[8].X2 = 56;
+    items[8].X2 = farform::kInnerR;
     items[8].Data = L"импорт OpenSSH-файла";
+    farform::FillSeparator(items[9], 11);
+    farform::FillButton(items[10], 12, L"Создать", true);
+    farform::FillButton(items[11], 12, L"Отмена", false);
 
-    items[9].Type = DI_TEXT;
-    items[9].Y1 = 10;
-    items[9].Flags = DIF_SEPARATOR;
-
-    items[10].Type = DI_BUTTON;
-    items[10].X1 = 16;
-    items[10].Y1 = 12;
-    items[10].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
-    items[10].Data = L"Создать";
-    items[11].Type = DI_BUTTON;
-    items[11].X1 = 30;
-    items[11].Y1 = 12;
-    items[11].Flags = DIF_CENTERGROUP;
-    items[11].Data = L"Отмена";
-
-    HANDLE dialog = OpenGuardedDialog(items, 12, 59, 15, 11, KeyCreateDialogGuid);
+    HANDLE dialog = OpenGuardedDialog(items, 12, farform::kWidth, 15, 11, KeyCreateDialogGuid);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) {
         Say(L"Не удалось открыть диалог ключа.");
         return false;
@@ -271,95 +126,22 @@ bool EditPassword(PasswordRecord& item, bool create) {
     wcsncpy_s(note, item.note.c_str(), _TRUNCATE);
 
     FarDialogItem items[14]{};
-    items[0].Type = DI_DOUBLEBOX;
-    items[0].X1 = 0;
-    items[0].Y1 = 0;
-    items[0].X2 = 58;
-    items[0].Y2 = 14;
-    items[0].Data = create ? L" Новый пароль " : L" Пароль ";
+    farform::FillBox(items[0], farform::kWidth, 15, create ? L" Новый пароль " : L" Пароль ");
+    farform::FillLabel(items[1], 2, L"Имя:");
+    farform::FillEdit(items[2], 2, farform::kEditX, farform::kInnerR, name, 127, false, DIF_FOCUS);
+    farform::FillLabel(items[3], 4, L"Логин:");
+    farform::FillEdit(items[4], 4, farform::kEditX, 32, user, 127, false);
+    farform::FillLabel(items[7], 4, L"Хост:", 35);
+    farform::FillEdit(items[8], 4, 42, farform::kInnerR, host, 255, false);
+    farform::FillLabel(items[5], 6, L"Пароль:");
+    farform::FillEdit(items[6], 6, farform::kEditX, farform::kInnerR, secret, 255, true);
+    farform::FillLabel(items[9], 8, L"Заметка:");
+    farform::FillEdit(items[10], 8, farform::kEditX, farform::kInnerR, note, 255, false);
+    farform::FillSeparator(items[11], 11);
+    farform::FillButton(items[12], 12, L"Сохранить", true);
+    farform::FillButton(items[13], 12, L"Отмена", false);
 
-    items[1].Type = DI_TEXT;
-    items[1].X1 = 2;
-    items[1].Y1 = 2;
-    items[1].Y2 = 2;
-    items[1].Data = L"Имя:";
-    items[2].Type = DI_EDIT;
-    items[2].X1 = 14;
-    items[2].Y1 = 2;
-    items[2].X2 = 56;
-    items[2].Y2 = 2;
-    items[2].Data = name;
-    items[2].MaxLength = 127;
-    items[2].Flags = DIF_FOCUS;
-
-    items[3].Type = DI_TEXT;
-    items[3].X1 = 2;
-    items[3].Y1 = 4;
-    items[3].Y2 = 4;
-    items[3].Data = L"Логин:";
-    items[4].Type = DI_EDIT;
-    items[4].X1 = 14;
-    items[4].Y1 = 4;
-    items[4].X2 = 32;
-    items[4].Y2 = 4;
-    items[4].Data = user;
-    items[4].MaxLength = 127;
-
-    items[7].Type = DI_TEXT;
-    items[7].X1 = 35;
-    items[7].Y1 = 4;
-    items[7].Y2 = 4;
-    items[7].Data = L"Хост:";
-    items[8].Type = DI_EDIT;
-    items[8].X1 = 42;
-    items[8].Y1 = 4;
-    items[8].X2 = 56;
-    items[8].Y2 = 4;
-    items[8].Data = host;
-    items[8].MaxLength = 255;
-
-    items[5].Type = DI_TEXT;
-    items[5].X1 = 2;
-    items[5].Y1 = 6;
-    items[5].Y2 = 6;
-    items[5].Data = L"Пароль:";
-    items[6].Type = DI_PSWEDIT;
-    items[6].X1 = 14;
-    items[6].Y1 = 6;
-    items[6].X2 = 56;
-    items[6].Y2 = 6;
-    items[6].Data = secret;
-    items[6].MaxLength = 255;
-
-    items[9].Type = DI_TEXT;
-    items[9].X1 = 2;
-    items[9].Y1 = 8;
-    items[9].Y2 = 8;
-    items[9].Data = L"Заметка:";
-    items[10].Type = DI_EDIT;
-    items[10].X1 = 14;
-    items[10].Y1 = 8;
-    items[10].X2 = 56;
-    items[10].Y2 = 8;
-    items[10].Data = note;
-    items[10].MaxLength = 255;
-
-    items[11].Type = DI_TEXT;
-    items[11].Y1 = 10;
-    items[11].Flags = DIF_SEPARATOR;
-
-    items[12].Type = DI_BUTTON;
-    items[12].X1 = 16;
-    items[12].Y1 = 12;
-    items[12].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
-    items[12].Data = L"Сохранить";
-    items[13].Type = DI_BUTTON;
-    items[13].X1 = 30;
-    items[13].Y1 = 12;
-    items[13].Flags = DIF_CENTERGROUP;
-    items[13].Data = L"Отмена";
-
-    HANDLE dialog = OpenGuardedDialog(items, 14, 59, 15, 13, PasswordDialogGuid);
+    HANDLE dialog = OpenGuardedDialog(items, 14, farform::kWidth, 15, 13, PasswordDialogGuid);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) {
         Say(L"Не удалось открыть диалог пароля.");
         return false;
@@ -397,49 +179,15 @@ bool EditSyncSettings(std::wstring& baseUrl, std::wstring& token) {
     wcsncpy_s(url, baseUrl.c_str(), _TRUNCATE);
     wcsncpy_s(pat, token.c_str(), _TRUNCATE);
     FarDialogItem items[8]{};
-    items[0].Type = DI_DOUBLEBOX;
-    items[0].X1 = 0;
-    items[0].Y1 = 0;
-    items[0].X2 = 62;
-    items[0].Y2 = 9;
-    items[0].Data = L" NoteKeeper · HTTPS, PAT: vault ";
-    items[1].Type = DI_TEXT;
-    items[1].X1 = 2;
-    items[1].Y1 = 2;
-    items[1].Data = L"URL:";
-    items[2].Type = DI_EDIT;
-    items[2].X1 = 10;
-    items[2].Y1 = 2;
-    items[2].X2 = 60;
-    items[2].Y2 = 2;
-    items[2].Data = url;
-    items[2].MaxLength = 511;
-    items[2].Flags = DIF_FOCUS;
-    items[3].Type = DI_TEXT;
-    items[3].X1 = 2;
-    items[3].Y1 = 4;
-    items[3].Data = L"PAT:";
-    items[4].Type = DI_PSWEDIT;
-    items[4].X1 = 10;
-    items[4].Y1 = 4;
-    items[4].X2 = 60;
-    items[4].Y2 = 4;
-    items[4].Data = pat;
-    items[4].MaxLength = 511;
-    items[5].Type = DI_TEXT;
-    items[5].Y1 = 6;
-    items[5].Flags = DIF_SEPARATOR;
-    items[6].Type = DI_BUTTON;
-    items[6].X1 = 18;
-    items[6].Y1 = 8;
-    items[6].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
-    items[6].Data = L"OK";
-    items[7].Type = DI_BUTTON;
-    items[7].X1 = 32;
-    items[7].Y1 = 8;
-    items[7].Flags = DIF_CENTERGROUP;
-    items[7].Data = L"Отмена";
-    HANDLE dialog = FarOpenDialog(g_info, MainGuid, DialogGuid, items, 8, 63, 10);
+    farform::FillBox(items[0], farform::kWidth, 10, L" NoteKeeper · HTTPS, PAT: vault ");
+    farform::FillLabel(items[1], 2, L"URL:");
+    farform::FillEdit(items[2], 2, farform::kEditX, farform::kInnerR, url, 511, false, DIF_FOCUS);
+    farform::FillLabel(items[3], 4, L"PAT:");
+    farform::FillEdit(items[4], 4, farform::kEditX, farform::kInnerR, pat, 511, true);
+    farform::FillSeparator(items[5], 6);
+    farform::FillButton(items[6], 8, L"OK", true);
+    farform::FillButton(items[7], 8, L"Отмена", false);
+    HANDLE dialog = OpenGuardedDialog(items, 8, farform::kWidth, 10, 7, DialogGuid);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) return false;
     const intptr_t result = g_info.DialogRun(dialog);
     const bool saved = result == 6;
@@ -471,49 +219,15 @@ bool EditKeyMeta(KeyRecord& item, bool create) {
     wcsncpy_s(name, item.name.c_str(), _TRUNCATE);
     wcsncpy_s(comment, item.comment.c_str(), _TRUNCATE);
     FarDialogItem items[8]{};
-    items[0].Type = DI_DOUBLEBOX;
-    items[0].X1 = 0;
-    items[0].Y1 = 0;
-    items[0].X2 = 58;
-    items[0].Y2 = 8;
-    items[0].Data = create ? L" Новый ключ " : L" Ключ ";
-    items[1].Type = DI_TEXT;
-    items[1].X1 = 2;
-    items[1].Y1 = 2;
-    items[1].Data = L"Имя:";
-    items[2].Type = DI_EDIT;
-    items[2].X1 = 14;
-    items[2].Y1 = 2;
-    items[2].X2 = 56;
-    items[2].Y2 = 2;
-    items[2].Data = name;
-    items[2].MaxLength = 127;
-    items[2].Flags = DIF_FOCUS;
-    items[3].Type = DI_TEXT;
-    items[3].X1 = 2;
-    items[3].Y1 = 4;
-    items[3].Data = L"Коммент:";
-    items[4].Type = DI_EDIT;
-    items[4].X1 = 14;
-    items[4].Y1 = 4;
-    items[4].X2 = 56;
-    items[4].Y2 = 4;
-    items[4].Data = comment;
-    items[4].MaxLength = 255;
-    items[5].Type = DI_TEXT;
-    items[5].Y1 = 6;
-    items[5].Flags = DIF_SEPARATOR;
-    items[6].Type = DI_BUTTON;
-    items[6].X1 = 16;
-    items[6].Y1 = 7;
-    items[6].Flags = DIF_DEFAULTBUTTON | DIF_CENTERGROUP;
-    items[6].Data = L"Сохранить";
-    items[7].Type = DI_BUTTON;
-    items[7].X1 = 30;
-    items[7].Y1 = 7;
-    items[7].Flags = DIF_CENTERGROUP;
-    items[7].Data = L"Отмена";
-    HANDLE dialog = OpenGuardedDialog(items, 8, 59, 9, 7, KeyDialogGuid);
+    farform::FillBox(items[0], farform::kWidth, 9, create ? L" Новый ключ " : L" Ключ ");
+    farform::FillLabel(items[1], 2, L"Имя:");
+    farform::FillEdit(items[2], 2, farform::kEditX, farform::kInnerR, name, 127, false, DIF_FOCUS);
+    farform::FillLabel(items[3], 4, L"Коммент:");
+    farform::FillEdit(items[4], 4, farform::kEditX, farform::kInnerR, comment, 255, false);
+    farform::FillSeparator(items[5], 5);
+    farform::FillButton(items[6], 7, L"Сохранить", true);
+    farform::FillButton(items[7], 7, L"Отмена", false);
+    HANDLE dialog = OpenGuardedDialog(items, 8, farform::kWidth, 9, 7, KeyDialogGuid);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) {
         Say(L"Не удалось открыть диалог ключа.");
         return false;
