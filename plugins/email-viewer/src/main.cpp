@@ -117,7 +117,7 @@ void WINAPI GetGlobalInfoW(GlobalInfo* Info) {
     Info->MinFarVersion.Build = FARMANAGERVERSION_BUILD;
     Info->MinFarVersion.Stage = FARMANAGERVERSION_STAGE;
     Info->Version.Major = 1;
-    Info->Version.Minor = 0;
+    Info->Version.Minor = 5;
     Info->Version.Revision = 0;
     Info->Version.Build = 1;
     Info->Version.Stage = VS_RELEASE;

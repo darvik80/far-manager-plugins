@@ -21,7 +21,6 @@ const uint64_t kAddDots = 0x8;
 const uint64_t kPreserveCase = 0x100;
 const uint64_t kAttrHighlight = 0x8000;
 const int kGetCurrentItem = 23;
-const intptr_t kGetText = 63;
 
 struct OpenPanelInfo {
     size_t StructSize;
@@ -261,6 +260,35 @@ SshPanel* PanelOf(HANDLE handle) {
     return SshPanel::Live(panel) ? panel : nullptr;
 }
 
+struct ServerForm {
+    wchar_t* name;
+    wchar_t* host;
+    wchar_t* port;
+    wchar_t* user;
+    wchar_t* key;
+    wchar_t* proxy;
+    wchar_t* password;
+};
+
+void PullServerForm(HANDLE dialog, ServerForm* form) {
+    if (!form || !g_info.SendDlgMessage) return;
+    farform::ReadEdit(g_info, dialog, 2, form->name, 128);
+    farform::ReadEdit(g_info, dialog, 4, form->host, 256);
+    farform::ReadEdit(g_info, dialog, 6, form->port, 16);
+    farform::ReadEdit(g_info, dialog, 8, form->user, 128);
+    farform::ReadEdit(g_info, dialog, 10, form->key, 520);
+    farform::ReadEdit(g_info, dialog, 12, form->proxy, 256);
+    farform::ReadEdit(g_info, dialog, 14, form->password, 256);
+}
+
+intptr_t WINAPI ServerDlgProc(HANDLE dialog, intptr_t msg, intptr_t param1, void* param2) {
+    if ((msg == DN_BTNCLICK && param1 == 16) || (msg == DN_CLOSE && param1 == 16)) {
+        auto* form = reinterpret_cast<ServerForm*>(g_info.SendDlgMessage(dialog, DM_GETDLGDATA, 0, nullptr));
+        PullServerForm(dialog, form);
+    }
+    return farform::detail::GuardProc(dialog, msg, param1, param2);
+}
+
 bool EditServer(StoredServer& server, bool create) {
     wchar_t name[128]{};
     wchar_t host[256]{};
@@ -273,7 +301,8 @@ bool EditServer(StoredServer& server, bool create) {
     wcsncpy_s(host, server.host.c_str(), _TRUNCATE);
     wcsncpy_s(port, server.port.empty() ? L"22" : server.port.c_str(), _TRUNCATE);
     wcsncpy_s(user, server.user.c_str(), _TRUNCATE);
-    wcsncpy_s(key, server.keyFile.empty() ? server.vaultKey.c_str() : server.keyFile.c_str(), _TRUNCATE);
+    const std::wstring keyShow = IdentityStore(server.keyFile);
+    wcsncpy_s(key, keyShow.empty() ? server.vaultKey.c_str() : keyShow.c_str(), _TRUNCATE);
     wcsncpy_s(proxy, server.proxy.c_str(), _TRUNCATE);
     wcsncpy_s(password, server.password.c_str(), _TRUNCATE);
 
@@ -306,26 +335,17 @@ bool EditServer(StoredServer& server, bool create) {
         items[8].Flags |= DIF_FOCUS;
     }
 
-    HANDLE dialog = OpenGuardedDialog(items, 18, farform::kWidth, 15, 17);
+    ServerForm form{name, host, port, user, key, proxy, password};
+    HANDLE dialog = farform::OpenGuarded(g_info, MainGuid, ServerDialogGuid, items, 18,
+                                        farform::kWidth, 15, 17, ServerDlgProc);
     if (!dialog || dialog == INVALID_HANDLE_VALUE) {
         Say(L"Не удалось открыть диалог сервера.");
         return false;
     }
+    g_info.SendDlgMessage(dialog, DM_SETDLGDATA, 0, &form);
     const intptr_t result = g_info.DialogRun(dialog);
     const bool saved = result == 16;
-    if (saved) {
-        auto text = [&](int id, wchar_t* buffer, size_t size) {
-            const wchar_t* value = reinterpret_cast<const wchar_t*>(g_info.SendDlgMessage(dialog, kGetText, id, nullptr));
-            if (value) wcsncpy_s(buffer, size, value, _TRUNCATE);
-        };
-        text(2, name, std::size(name));
-        text(4, host, std::size(host));
-        text(6, port, std::size(port));
-        text(8, user, std::size(user));
-        text(10, key, std::size(key));
-        text(12, proxy, std::size(proxy));
-        text(14, password, std::size(password));
-    }
+    if (saved) PullServerForm(dialog, &form);
     g_info.DialogFree(dialog);
     if (!saved) return false;
     if (name[0] == L'\0' || host[0] == L'\0') {
@@ -338,12 +358,9 @@ bool EditServer(StoredServer& server, bool create) {
     server.user = user;
     server.proxy = proxy;
     server.fromConfig = false;
-    const bool keyPath = key[0] && (wcschr(key, L'\\') || wcschr(key, L'/') ||
-                                    (key[1] == L':' && ((key[0] >= L'A' && key[0] <= L'Z') ||
-                                                        (key[0] >= L'a' && key[0] <= L'z'))));
-    DWORD keyAttr = keyPath ? GetFileAttributesW(key) : INVALID_FILE_ATTRIBUTES;
-    if (keyPath && keyAttr != INVALID_FILE_ATTRIBUTES && (keyAttr & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-        server.keyFile = key;
+    const std::wstring resolved = ResolveIdentityPath(key);
+    if (FileExists(resolved)) {
+        server.keyFile = IdentityStore(key);
         server.vaultKey.clear();
     } else {
         server.vaultKey = key;
@@ -368,9 +385,9 @@ void ShowHost(const StoredServer& site) {
     const std::wstring port = L"Порт: " + (site.port.empty() ? L"22" : site.port);
     const std::wstring user = L"Логин: " + (site.user.empty() ? L"(по умолчанию)" : site.user);
     std::wstring key = L"Ключ: ";
-    if (!site.keyFile.empty()) key += site.keyFile;
+    if (!site.keyFile.empty()) key += IdentityLabel(site.keyFile);
     else if (!site.vaultKey.empty()) key += site.vaultKey + L" (vault)";
-    else if (!site.identityFiles.empty()) key += site.identityFiles.front();
+    else if (!site.identityFiles.empty()) key += IdentityLabel(site.identityFiles.front());
     else if (!site.keyLabel.empty()) key += site.keyLabel;
     else key += L"(ssh-agent)";
     const std::wstring proxy = site.fromTeleport ? L"Прокси: tsh proxy ssh"
@@ -416,6 +433,7 @@ std::wstring CurrentName() {
 const intptr_t kHotkeyCreate = 1;
 const intptr_t kHotkeyEdit = 2;
 HANDLE g_hotkeyPanel = nullptr;
+bool g_hotkeyPending = false;
 
 void RefreshPanel() {
     if (!g_info.PanelControl) return;
@@ -424,6 +442,7 @@ void RefreshPanel() {
 }
 
 void RunSshHotkey(intptr_t action) {
+    g_hotkeyPending = false;
     auto* panel = PanelOf(g_hotkeyPanel);
     if (!panel || !panel->sites) return;
     if (action == kHotkeyCreate) {
@@ -446,6 +465,8 @@ void RunSshHotkey(intptr_t action) {
 }
 
 bool PostSshHotkey(HANDLE hPanel, intptr_t action) {
+    if (g_hotkeyPending) return true;
+    g_hotkeyPending = true;
     g_hotkeyPanel = hPanel;
     if (g_info.AdvControl && g_info.AdvControl(MainGuid, ACTL_SYNCHRO, 0, reinterpret_cast<void*>(action)))
         return true;
@@ -642,8 +663,8 @@ void WINAPI GetOpenPanelInfoW(OpenPanelInfo* info) {
     info->CurDir = panel->curDir.c_str();
     static const wchar_t* siteTitles[] = { L"Имя", L"Адрес", L"Ключ" };
     static const wchar_t* fileTitles[] = { L"Имя", L"Размер", L"Дата" };
-    static const PanelMode sitesMode{ L"N,C0,C1", L"0,30,24", siteTitles, L"N,C0", L"0,0", 1 };
-    static const PanelMode fileMode{ L"N,S,DM", L"0,12,14", fileTitles, L"N,S", L"0,10", 1 };
+    static const PanelMode sitesMode{ L"N,C0,C1", L"0,16,8", siteTitles, L"N,C0", L"0,0", 0 };
+    static const PanelMode fileMode{ L"N,S,DM", L"0,12,14", fileTitles, L"N,S", L"0,10", 0 };
     static KeyLabel siteKeys[] = {
         {{VK_F2, 0}, L"Терм", L"SSH-терминал"},
         {{VK_F3, 0}, L"Инфо", L"Карточка сервера"},
@@ -667,7 +688,7 @@ void WINAPI GetOpenPanelInfoW(OpenPanelInfo* info) {
     static KeyTitles fileBar{ std::size(fileKeys), fileKeys };
     info->PanelModesArray = panel->sites ? &sitesMode : &fileMode;
     info->PanelModesNumber = 1;
-    info->StartPanelMode = 0;
+    info->StartPanelMode = L'0';
     info->StartSortMode = 2;
     info->StartSortOrder = 0;
     info->KeyBar = panel->sites ? &siteBar : &fileBar;
@@ -686,8 +707,8 @@ intptr_t WINAPI GetFindDataW(GetFindDataInfo* info) {
             row.host = (site.user.empty() ? L"" : site.user + L"@") + site.host;
             if (!site.port.empty() && site.port != L"22") row.host += L":" + site.port;
             if (!site.proxy.empty()) row.host += L" via " + site.proxy;
-            if (site.fromTeleport) row.key = site.keyLabel + L"  tsh";
-            else if (site.fromConfig) row.key = site.keyLabel + L"  config";
+            if (site.fromTeleport) row.key = L"tsh";
+            else if (site.fromConfig) row.key = L"config";
             else row.key = site.keyLabel;
             PluginPanelItem item{};
             FillItem(item, row.name, true, 0, 0);

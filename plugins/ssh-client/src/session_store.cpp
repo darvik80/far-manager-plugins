@@ -127,16 +127,17 @@ std::vector<StoredServer> LoadServers() {
                     migrated = true;
                 }
             }
-            if (server.vaultKey.empty() && !server.keyFile.empty() &&
-                server.keyFile.find(L'\\') == std::wstring::npos && server.keyFile.find(L'/') == std::wstring::npos &&
-                server.keyFile.find(L'.') == std::wstring::npos) {
-                server.vaultKey = server.keyFile;
-                server.keyFile.clear();
-                migrated = true;
-            } else if (server.vaultKey.empty() && !server.keyFile.empty() &&
-                       (server.keyFile.find(L"BEGIN ") != std::wstring::npos || GetFileAttributesW(server.keyFile.c_str()) != INVALID_FILE_ATTRIBUTES)) {
-                if (VaultStoreKeyFile(server.name, server.keyFile)) {
-                    server.vaultKey = server.name;
+            if (server.vaultKey.empty() && !server.keyFile.empty()) {
+                const std::wstring stored = IdentityStore(server.keyFile);
+                if (FileExists(ResolveIdentityPath(stored))) {
+                    if (stored != server.keyFile) {
+                        server.keyFile = stored;
+                        migrated = true;
+                    }
+                } else if (server.keyFile.find(L'\\') == std::wstring::npos &&
+                           server.keyFile.find(L'/') == std::wstring::npos &&
+                           server.keyFile.find(L'.') == std::wstring::npos) {
+                    server.vaultKey = server.keyFile;
                     server.keyFile.clear();
                     migrated = true;
                 }

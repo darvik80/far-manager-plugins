@@ -32,11 +32,11 @@ python docs\tools\far_shots.py
 | F7 / Shift+F4 | новый сервер |
 | F8 | удалить |
 
-Поле **Ключ** — путь к PEM или **имя записи** Secret Vault. Для обычного (не Teleport) хоста этот ключ единственный: агент и `~/.ssh` не подмешиваются. **Пароль** тоже может быть именем из vault. Пустые поля ищут запись по точному хосту.
+Поле **Ключ** — имя файла в `~/.ssh` (`id_rsa`), путь к PEM или **имя записи** Secret Vault. Для обычного (не Teleport) хоста логин идёт только этой личностью (`IdentitiesOnly`). Агент нужен, если файл закрыт паролем. **Пароль** тоже может быть именем из vault. Пустые поля ищут запись по точному хосту.
 
 ![Диалог сервера](images/ssh-edit.png)
 
-SFTP — `ssh.exe`. С ключом из vault: `-i` + `IdentitiesOnly=yes` + `IdentityAgent=none`, конфиг `~/.ssh` не читается. Без ключа в карточке — агент и `~/.ssh/config`, как в консоли. Teleport: `ssh.exe` + `tsh proxy ssh` и сертификат `~/.tsh`. Если `tsh login` протух — F6, не Enter.
+SFTP — `ssh.exe`. С ключом в карточке: `-i` + `IdentitiesOnly=yes`, конфиг `~/.ssh` не читается (`-F NUL`). Без ключа — агент и `~/.ssh/config`, как в консоли. Teleport: `ssh.exe` + `tsh proxy ssh` и сертификат `~/.tsh`. Если `tsh login` протух — F6, не Enter.
 
 ![Каталог SFTP](images/ssh-sftp.png)
 

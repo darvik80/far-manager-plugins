@@ -78,62 +78,50 @@ inline void FillButton(FarDialogItem& item, intptr_t y, const wchar_t* text, boo
     item.Flags = DIF_CENTERGROUP | (def ? DIF_DEFAULTBUTTON : 0);
 }
 
+inline void ReadEdit(const PluginStartupInfo& info, HANDLE dlg, intptr_t id, wchar_t* buf, size_t size) {
+    if (!buf || size == 0) return;
+    buf[0] = 0;
+    if (!info.SendDlgMessage) return;
+    FarDialogItemData data{};
+    data.StructSize = sizeof(data);
+    data.PtrLength = static_cast<intptr_t>(size - 1);
+    data.PtrData = buf;
+    info.SendDlgMessage(dlg, DM_GETTEXT, id, &data);
+    buf[size - 1] = 0;
+}
+
 namespace detail {
 
 inline thread_local const PluginStartupInfo* g_info = nullptr;
-inline thread_local bool g_eatReturn = false;
-inline thread_local bool g_eatF4 = false;
-inline thread_local bool g_eatF7 = false;
+inline thread_local DWORD g_eatUntil = 0;
 inline thread_local intptr_t g_cancel = -1;
 
-inline bool Eating() {
-    return g_eatReturn || g_eatF4 || g_eatF7;
-}
-
-inline bool Down(int vk) {
-    return (GetAsyncKeyState(vk) & 0x8000) != 0;
-}
-
-inline void ReleaseIfUp() {
-    if (g_eatReturn && !Down(VK_RETURN)) g_eatReturn = false;
-    if (g_eatF4 && !Down(VK_F4)) g_eatF4 = false;
-    if (g_eatF7 && !Down(VK_F7)) g_eatF7 = false;
-}
-
-inline bool EatVk(WORD vk) {
-    if (vk == VK_RETURN) return g_eatReturn;
-    if (vk == VK_F4) return g_eatF4;
-    if (vk == VK_F7) return g_eatF7;
-    return false;
+inline bool GuardActive() {
+    return g_eatUntil != 0 && GetTickCount() < g_eatUntil;
 }
 
 inline bool LeftoverKey(const void* param2) {
     if (!param2) return false;
     const auto* rec = static_cast<const INPUT_RECORD*>(param2);
     if (((rec->EventType & 0x7FFF) != KEY_EVENT) || !rec->Event.KeyEvent.bKeyDown) return false;
-    return EatVk(rec->Event.KeyEvent.wVirtualKeyCode);
+    const WORD vk = rec->Event.KeyEvent.wVirtualKeyCode;
+    return vk == VK_RETURN || vk == VK_F4 || vk == VK_F7;
 }
 
 inline intptr_t WINAPI GuardProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
     const PluginStartupInfo* info = g_info;
     if (msg == DN_INITDIALOG) {
-        g_eatReturn = Down(VK_RETURN);
-        g_eatF4 = Down(VK_F4);
-        g_eatF7 = Down(VK_F7);
         g_cancel = reinterpret_cast<intptr_t>(param2);
+        g_eatUntil = GetTickCount() + 400;
         if (info && info->SendDlgMessage)
             info->SendDlgMessage(dlg, DM_SETINPUTNOTIFY, 1, nullptr);
     }
-    ReleaseIfUp();
+    if (msg == DN_EDITCHANGE || msg == DN_BTNCLICK)
+        g_eatUntil = 0;
     if (msg == DN_DRAWDIALOG)
         return info && info->DefDlgProc ? info->DefDlgProc(dlg, msg, param1, param2) : 1;
-    if (msg == DN_BTNCLICK) {
-        g_eatReturn = g_eatF4 = g_eatF7 = false;
-    }
-    if (Eating() && (msg == DN_INPUT || msg == DN_CONTROLINPUT) && LeftoverKey(param2))
+    if (GuardActive() && (msg == DN_INPUT || msg == DN_CONTROLINPUT) && LeftoverKey(param2))
         return msg == DN_INPUT ? 0 : 1;
-    if (msg == DN_CLOSE && Eating() && param1 >= 0 && param1 != g_cancel)
-        return 0;
     if (info && info->DefDlgProc)
         return info->DefDlgProc(dlg, msg, param1, param2);
     return 1;
@@ -149,12 +137,14 @@ inline HANDLE OpenGuarded(
     size_t count,
     intptr_t width,
     intptr_t height,
-    intptr_t cancelId)
+    intptr_t cancelId,
+    intptr_t (WINAPI *proc)(HANDLE, intptr_t, intptr_t, void*) = nullptr)
 {
     detail::g_info = &info;
-    HANDLE dialog = FarOpenDialog(info, pluginId, dialogId, items, count, width, height, detail::GuardProc, cancelId);
+    if (!proc) proc = detail::GuardProc;
+    HANDLE dialog = FarOpenDialog(info, pluginId, dialogId, items, count, width, height, proc, cancelId);
     if (!dialog || dialog == INVALID_HANDLE_VALUE)
-        dialog = FarOpenDialog(info, pluginId, dialogId, items, count, width, height);
+        dialog = FarOpenDialog(info, pluginId, dialogId, items, count, width, height, proc, cancelId);
     return dialog;
 }
 
@@ -178,9 +168,10 @@ inline std::wstring AskText(
     if (!dialog || dialog == INVALID_HANDLE_VALUE) return {};
     const intptr_t result = info.DialogRun(dialog);
     std::wstring text;
-    if (result == 3 && info.SendDlgMessage) {
-        const wchar_t* value = reinterpret_cast<const wchar_t*>(info.SendDlgMessage(dialog, 63, 2, nullptr));
-        if (value) text = value;
+    if (result == 3) {
+        wchar_t buf[512]{};
+        ReadEdit(info, dialog, 2, buf, 512);
+        text = buf;
     }
     info.DialogFree(dialog);
     return text;

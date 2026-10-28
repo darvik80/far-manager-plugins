@@ -348,6 +348,44 @@ bool FileExists(const std::wstring& path) {
     return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+std::wstring ResolveIdentityPath(const std::wstring& spec) {
+    std::wstring path = spec;
+    while (!path.empty() && (path.front() == L' ' || path.front() == L'\t')) path.erase(path.begin());
+    while (!path.empty() && (path.back() == L' ' || path.back() == L'\t')) path.pop_back();
+    if (path.empty()) return {};
+    path = ExpandUserPath(path);
+    if (IsAbsolute(path) || path.find(L'\\') != std::wstring::npos)
+        return FileExists(path) ? FullPath(path) : path;
+    const std::wstring homeKey = SshDirectory() + L"\\" + path;
+    if (FileExists(homeKey)) return homeKey;
+    return spec;
+}
+
+std::wstring SshRelativeName(const std::wstring& path) {
+    const std::wstring dir = SshDirectory();
+    if (path.size() <= dir.size() + 1) return {};
+    if (_wcsnicmp(path.c_str(), dir.c_str(), dir.size()) != 0) return {};
+    if (path[dir.size()] != L'\\' && path[dir.size()] != L'/') return {};
+    return path.substr(dir.size() + 1);
+}
+
+std::wstring IdentityStore(const std::wstring& spec) {
+    const std::wstring resolved = ResolveIdentityPath(spec);
+    if (!FileExists(resolved)) return spec;
+    const std::wstring relative = SshRelativeName(resolved);
+    return relative.empty() ? resolved : relative;
+}
+
+std::wstring IdentityLabel(const std::wstring& spec) {
+    if (spec.empty()) return {};
+    const std::wstring stored = IdentityStore(spec);
+    if (stored.empty()) return spec;
+    const std::wstring resolved = ResolveIdentityPath(stored);
+    if (FileExists(resolved) && !SshRelativeName(resolved).empty())
+        return L"~/.ssh/" + stored;
+    return stored;
+}
+
 std::vector<std::wstring> DefaultIdentityFiles() {
     std::vector<std::wstring> files;
     const wchar_t* names[] = { L"id_ed25519", L"id_ecdsa", L"id_rsa" };

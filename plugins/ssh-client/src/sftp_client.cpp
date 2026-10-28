@@ -200,36 +200,49 @@ bool ExclusiveKey(const StoredServer& server) {
 bool ResolveExclusiveKey(const StoredServer& server, std::wstring& key, std::wstring& cleanup, std::wstring& error) {
     key.clear();
     cleanup.clear();
+    const std::wstring named = !server.keyFile.empty() ? server.keyFile : server.vaultKey;
+    if (named.empty()) return true;
+    const std::wstring file = ResolveIdentityPath(named);
+    if (FileExists(file)) {
+        key = file;
+        return true;
+    }
     if (!server.vaultKey.empty()) {
         key = VaultLookupKeyFile(server.vaultKey);
         if (key.empty() || !FileExists(key)) {
-            error = L"Ключ не найден в Secret Vault / NoteKeeper: " + server.vaultKey;
+            error = L"Ключ не найден в ~/.ssh и в Secret Vault: " + server.vaultKey;
             key.clear();
             return false;
         }
         cleanup = key;
         return true;
     }
-    if (!server.keyFile.empty()) {
-        key = server.keyFile;
-        if (!FileExists(key)) {
-            error = L"Файл ключа не найден: " + server.keyFile;
-            key.clear();
-            return false;
-        }
-        return true;
-    }
-    return true;
+    error = L"Файл ключа не найден: " + named;
+    return false;
 }
 
 void AppendExclusiveIdentity(std::wstring& command, const std::wstring& key) {
-    command += L" -F none";
+    command += L" -F NUL";
     command += L" -i " + QuoteArg(key);
     command += L" -o IdentitiesOnly=yes";
-    command += L" -o IdentityAgent=none";
     command += L" -o PreferredAuthentications=publickey";
-    command += L" -o PubkeyAcceptedKeyTypes=+ssh-rsa";
     command += L" -v";
+}
+
+std::wstring CollectLines(const std::string& text, const char* prefix) {
+    std::wstring out;
+    if (!prefix || !*prefix) return out;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        const size_t at = text.find(prefix, pos);
+        if (at == std::string::npos) break;
+        size_t end = text.find_first_of("\r\n", at);
+        if (end == std::string::npos) end = text.size();
+        if (!out.empty()) out += L"\n";
+        out += Wide(text.substr(at, end - at).c_str());
+        pos = end + 1;
+    }
+    return out;
 }
 
 bool LaunchConsole(const std::wstring& inner, const std::wstring& title, const std::wstring& cleanup, std::wstring& error) {
@@ -256,7 +269,7 @@ bool LaunchConsole(const std::wstring& inner, const std::wstring& title, const s
 
 }  // namespace
 
-std::wstring PrepareIdentityFile(const std::wstring& path);
+std::wstring PrepareIdentityFile(const std::wstring& path, bool rewriteTemp);
 
 bool OpenSshTerminal(const StoredServer& server, std::wstring& error) {
     if (server.host.empty()) {
@@ -285,7 +298,7 @@ bool OpenSshTerminal(const StoredServer& server, std::wstring& error) {
         const bool exclusive = ExclusiveKey(server);
         if (exclusive) {
             if (!ResolveExclusiveKey(server, key, cleanup, error)) return false;
-            error = PrepareIdentityFile(key);
+            error = PrepareIdentityFile(key, !cleanup.empty());
             if (!error.empty()) return false;
             AppendExclusiveIdentity(inner, key);
             if (!server.port.empty() && server.port != L"22")
@@ -370,10 +383,16 @@ std::wstring SftpConnection::TakeJumpErr() {
     if (ContainsI(text, "UNPROTECTED") || ContainsI(text, "too open") ||
         ContainsI(text, "bad permissions") || ContainsI(text, "Permissions for"))
         return L"OpenSSH проигнорировал ключ: слишком открытые права на временный файл.";
-    if (ContainsI(text, "Skipping ssh-rsa") || ContainsI(text, "algo not in PubkeyAccepted"))
-        return L"OpenSSH не отправил RSA-ключ (алгоритм ssh-rsa выключен).";
-    if (ContainsI(text, "passphrase"))
-        return L"Ключ закрыт паролем, OpenSSH в BatchMode его не спрашивает.";
+    const std::wstring offered = CollectLines(text, "Offering public key:");
+    const auto lastNl = text.find_last_of('\n');
+    std::string last = lastNl == std::string::npos ? text : text.substr(lastNl + 1);
+    while (!last.empty() && (last[0] == '\r' || last[0] == ' ' || last[0] == '\t')) last.erase(last.begin());
+    if (ContainsI(text, "incorrect passphrase") || ContainsI(text, "passphrase")) {
+        std::wstring out = L"Файл ключа закрыт паролем. SFTP не спрашивает фразу — нужна копия в ssh-agent.";
+        if (!offered.empty()) out += L"\n" + offered;
+        else if (!last.empty()) out += L"\n" + Wide(last.c_str());
+        return out;
+    }
     const size_t loadAt = text.find("Load key ");
     if (loadAt != std::string::npos) {
         std::string line = text.substr(loadAt);
@@ -381,29 +400,12 @@ std::wstring SftpConnection::TakeJumpErr() {
         if (nl != std::string::npos) line.resize(nl);
         return Wide(line.c_str());
     }
-    std::string offer;
-    const char* markers[] = {"Offering public key:", "Offering", "Authentications that can continue:"};
-    size_t pos = std::string::npos;
-    const char* hit = nullptr;
-    for (const char* marker : markers) {
-        const size_t at = text.find(marker);
-        if (at != std::string::npos && (pos == std::string::npos || at < pos)) {
-            pos = at;
-            hit = marker;
-        }
-    }
-    if (pos != std::string::npos && hit) {
-        std::string line = text.substr(pos);
-        const auto nl = line.find_first_of("\r\n");
-        if (nl != std::string::npos) line.resize(nl);
-        offer = line;
-    }
-    const auto lastNl = text.find_last_of('\n');
-    std::string last = lastNl == std::string::npos ? text : text.substr(lastNl + 1);
-    while (!last.empty() && (last[0] == '\r' || last[0] == ' ' || last[0] == '\t')) last.erase(last.begin());
     std::wstring out = Wide(last.c_str());
-    if (!offer.empty() && ContainsI(last, "Permission denied"))
-        out += L"\n" + Wide(offer.c_str()) + L"\nКонсольный ssh без -i, скорее всего, берёт другой ключ из агента.";
+    if (ContainsI(last, "Permission denied")) {
+        if (!offered.empty()) out += L"\n" + offered;
+        else if (ContainsI(text, "Skipping ssh-rsa") || ContainsI(text, "algo not in PubkeyAccepted"))
+            out += L"\nOpenSSH не отправил RSA-ключ (алгоритм ssh-rsa выключен).";
+    }
     return out;
 }
 
@@ -563,7 +565,7 @@ bool SftpConnection::OpenSshSftpPipe(const StoredServer& server, std::wstring& e
     const bool exclusive = ExclusiveKey(server);
     if (exclusive) {
         if (!ResolveExclusiveKey(server, key, cleanup, error)) return false;
-        error = PrepareIdentityFile(key);
+        error = PrepareIdentityFile(key, !cleanup.empty());
         if (!error.empty()) return false;
         keyCleanup_ = cleanup;
         AppendExclusiveIdentity(command, key);
@@ -1055,8 +1057,9 @@ std::string PublicFromSshKeygen(const std::wstring& path) {
 
 std::string ReadKeyBytes(const std::wstring& path);
 
-std::wstring PrepareIdentityFile(const std::wstring& path) {
+std::wstring PrepareIdentityFile(const std::wstring& path, bool rewriteTemp) {
     if (path.empty() || !FileExists(path)) return L"Нет файла ключа.";
+    if (!rewriteTemp) return {};
     std::string pem = ReadKeyBytes(path);
     NkNormalizePem(pem);
     if (pem.empty()) return L"Ключ из vault пустой.";

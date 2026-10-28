@@ -4,8 +4,9 @@
 
 PluginStartupInfo g_info{};
 
-HANDLE OpenGuardedDialog(FarDialogItem* items, size_t count, int width, int height, intptr_t cancelId) {
-    return farform::OpenGuarded(g_info, MainGuid, DialogGuid, items, count, width, height, cancelId);
+HANDLE OpenGuardedDialog(FarDialogItem* items, size_t count, intptr_t width, intptr_t height, intptr_t cancelId,
+                         const GUID& dialogId) {
+    return farform::OpenGuarded(g_info, MainGuid, dialogId, items, count, width, height, cancelId);
 }
 
 void Say(const wchar_t* text) {
