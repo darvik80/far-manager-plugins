@@ -243,7 +243,7 @@ struct SshPanel {
         remote = connection.Home();
         const std::wstring who = site.user.empty() ? site.host : site.user + L"@" + site.host;
         title = L" " + who + L" ";
-        format = L"SFTP";
+        format = connection.ShellMode() ? L"SHELL" : L"SFTP";
         curDir = Wide(remote);
     }
 
@@ -306,8 +306,7 @@ bool EditServer(StoredServer& server, bool create) {
     wcsncpy_s(proxy, server.proxy.c_str(), _TRUNCATE);
     wcsncpy_s(password, server.password.c_str(), _TRUNCATE);
 
-    const std::wstring title = farform::PaddedTitle(
-        create ? L"Новый сервер" : (server.fromTeleport ? L"Teleport" : L"Сервер"));
+    const std::wstring title = farform::PaddedTitle(create ? L"Новый сервер" : L"Сервер");
     FarDialogItem items[18]{};
     farform::FillBox(items[0], farform::kWidth, 15, title.c_str());
     farform::FillLabel(items[1], 2, L"Имя:");
@@ -322,18 +321,11 @@ bool EditServer(StoredServer& server, bool create) {
     farform::FillEdit(items[10], 8, farform::kEditX, farform::kInnerR, key, 519, false);
     farform::FillLabel(items[11], 10, L"Прокси:");
     farform::FillEdit(items[12], 10, farform::kEditX, 32, proxy, 255, false);
-    farform::FillLabel(items[13], 10, L"Пароль:", 35);
+    farform::FillLabel(items[13], 10, server.vaultPassword.empty() ? L"Пароль:" : L"Из vault:", 35);
     farform::FillEdit(items[14], 10, 44, farform::kInnerR, password, 255, true);
     farform::FillSeparator(items[15], 11);
     farform::FillButton(items[16], 12, L"Сохранить", true);
     farform::FillButton(items[17], 12, L"Отмена", false);
-
-    if (!create && server.fromTeleport) {
-        items[2].Flags = DIF_READONLY;
-        items[4].Flags |= DIF_READONLY;
-        items[6].Flags |= DIF_READONLY;
-        items[8].Flags |= DIF_FOCUS;
-    }
 
     ServerForm form{name, host, port, user, key, proxy, password};
     HANDLE dialog = farform::OpenGuarded(g_info, MainGuid, ServerDialogGuid, items, 18,
@@ -355,6 +347,10 @@ bool EditServer(StoredServer& server, bool create) {
     server.name = name;
     server.host = host;
     server.port = port[0] ? port : L"22";
+    if (IsTeleportNode(server.host)) {
+        Say(L"Это нода Teleport (tsh) — она уже в списке сама, отдельная запись не нужна.");
+        return false;
+    }
     server.user = user;
     server.proxy = proxy;
     server.fromConfig = false;
@@ -382,7 +378,9 @@ void ShowHost(const StoredServer& site) {
         : site.fromConfig ? L"Источник: ~/.ssh/config"
         : L"Источник: SSH-плагин";
     const std::wstring host = L"Адрес: " + site.host;
-    const std::wstring port = L"Порт: " + (site.port.empty() ? L"22" : site.port);
+    const std::wstring port = site.fromTeleport
+        ? L"Порт: определяет tsh"
+        : L"Порт: " + (site.port.empty() ? L"22" : site.port);
     const std::wstring user = L"Логин: " + (site.user.empty() ? L"(по умолчанию)" : site.user);
     std::wstring key = L"Ключ: ";
     if (!site.keyFile.empty()) key += IdentityLabel(site.keyFile);
@@ -402,9 +400,21 @@ void ShowHost(const StoredServer& site) {
     g_info.Message(MainGuid, MenuGuid, FMSG_LEFTALIGN | FMSG_MB_OK, nullptr, lines, 10, 1);
 }
 
-bool Upsert(StoredServer server) {
+// The panel list is what the user counts duplicates by, so a new name is checked
+// against the visible rows rather than against sessions.ini alone.
+bool NameTaken(const SshPanel& panel, const std::wstring& name, const std::wstring& except) {
+    const std::wstring key = Lower(name);
+    const std::wstring skip = Lower(except);
+    if (key == skip) return false;
+    for (const auto& site : panel.cached)
+        if (Lower(site.name) == key) return true;
+    return false;
+}
+
+bool Upsert(StoredServer server, const std::wstring& replaces) {
     auto servers = LoadServers();
-    const std::wstring key = Lower(server.name);
+    // an edited row is found by its old name: otherwise a rename leaves the old entry behind
+    const std::wstring key = Lower(replaces.empty() ? server.name : replaces);
     bool replaced = false;
     for (auto& item : servers) {
         if (Lower(item.name) != key) continue;
@@ -432,8 +442,6 @@ std::wstring CurrentName() {
 
 const intptr_t kHotkeyCreate = 1;
 const intptr_t kHotkeyEdit = 2;
-HANDLE g_hotkeyPanel = nullptr;
-bool g_hotkeyPending = false;
 
 void RefreshPanel() {
     if (!g_info.PanelControl) return;
@@ -441,22 +449,33 @@ void RefreshPanel() {
     g_info.PanelControl(PANEL_ACTIVE, FCTL_REDRAWPANEL, 0, nullptr);
 }
 
-void RunSshHotkey(intptr_t action) {
-    g_hotkeyPending = false;
-    auto* panel = PanelOf(g_hotkeyPanel);
+void RunSshHotkey(HANDLE hPanel, intptr_t action) {
+    auto* panel = PanelOf(hPanel);
     if (!panel || !panel->sites) return;
     if (action == kHotkeyCreate) {
         StoredServer server;
-        if (EditServer(server, true)) Upsert(server);
+        if (EditServer(server, true)) {
+            if (NameTaken(*panel, server.name, {}))
+                Say(L"Сервер с таким именем уже есть.");
+            else
+                Upsert(server, {});
+        }
     } else {
         const std::wstring name = CurrentName();
         const StoredServer* site = panel->Find(name);
         if (site) {
+            // Teleport hosts belong to tsh — only the read-only card is available
+            if (site->fromTeleport) {
+                ShowHost(*site);
+                return;
+            }
             StoredServer edited = *site;
-            const bool tsh = site->fromTeleport;
+            const std::wstring original = site->name;
             if (EditServer(edited, false)) {
-                if (tsh) edited.fromTeleport = true;
-                Upsert(edited);
+                if (NameTaken(*panel, edited.name, original))
+                    Say(L"Сервер с таким именем уже есть.");
+                else
+                    Upsert(edited, original);
             }
         }
     }
@@ -465,12 +484,10 @@ void RunSshHotkey(intptr_t action) {
 }
 
 bool PostSshHotkey(HANDLE hPanel, intptr_t action) {
-    if (g_hotkeyPending) return true;
-    g_hotkeyPending = true;
-    g_hotkeyPanel = hPanel;
-    if (g_info.AdvControl && g_info.AdvControl(MainGuid, ACTL_SYNCHRO, 0, reinterpret_cast<void*>(action)))
-        return true;
-    RunSshHotkey(action);
+    // ACTL_SYNCHRO fires only at FAR's next GetInputRecord, so a posted hotkey would
+    // be served on the following key press; the panel key handler is a safe place
+    // to run the dialog directly, as F3/F6 already do
+    RunSshHotkey(hPanel, action);
     return true;
 }
 
@@ -899,7 +916,11 @@ intptr_t WINAPI DeleteFilesW(const DeleteFilesInfo* info) {
             const wchar_t* name = info->PanelItem[i].FileName;
             if (!name) continue;
             const StoredServer* site = panel->Find(name);
-            if (site && site->fromTeleport) {
+            const bool own = std::any_of(servers.begin(), servers.end(), [&](const StoredServer& item) {
+                return Lower(item.name) == Lower(name);
+            });
+            // a saved copy of a tsh node is the user's own line, removing it must stay possible
+            if (site && site->fromTeleport && !own) {
                 if ((info->OpMode & kSilent) == 0)
                     Say(L"Этот сервер из tsh ls и не удаляется отсюда.");
                 continue;
@@ -945,8 +966,7 @@ intptr_t WINAPI MakeDirectoryW(MakeDirectoryInfo* info) {
 }
 
 intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* info) {
-    if (!info || info->Event != SE_COMMONSYNCHRO) return 0;
-    RunSshHotkey(reinterpret_cast<intptr_t>(info->Param));
+    (void)info;
     return 0;
 }
 

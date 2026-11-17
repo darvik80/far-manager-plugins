@@ -443,6 +443,7 @@ void SftpConnection::Close() {
         drainThread_ = nullptr;
     }
     pipeSftp_ = false;
+    shellMode_ = false;
     sftpNextId_ = 1;
     jumpWaitMs_ = 25000;
     jumpErrText_.clear();
@@ -802,21 +803,25 @@ bool IsKeyDown(const INPUT_RECORD& rec, WORD vk) {
 }
 
 void PollCopyCancel(CopyMeter& meter) {
-    if (meter.silent) return;
     if (g_copyCancel) {
         meter.cancelled = true;
         return;
     }
+    // FAR's main loop is blocked while the copy runs, so nothing drains the
+    // console input queue: keys pressed during the copy would replay on the
+    // panel afterwards. Swallow them all, only Esc cancels.
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
     if (!input || input == INVALID_HANDLE_VALUE) return;
     INPUT_RECORD rec{};
     DWORD count = 0;
-    if (!PeekConsoleInputW(input, &rec, 1, &count) || count == 0) return;
-    if (!IsKeyDown(rec, VK_ESCAPE)) return;
-    DWORD read = 0;
-    ReadConsoleInputW(input, &rec, 1, &read);
-    meter.cancelled = true;
-    g_copyCancel = true;
+    while (PeekConsoleInputW(input, &rec, 1, &count) && count > 0) {
+        DWORD read = 0;
+        if (!ReadConsoleInputW(input, &rec, 1, &read) || read == 0) break;
+        if (!meter.silent && IsKeyDown(rec, VK_ESCAPE)) {
+            meter.cancelled = true;
+            g_copyCancel = true;
+        }
+    }
 }
 
 intptr_t WINAPI CopyDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* param2) {
@@ -843,10 +848,13 @@ intptr_t WINAPI CopyDlgProc(HANDLE dlg, intptr_t msg, intptr_t param1, void* par
         if (g_copyMeter) g_copyMeter->cancelled = true;
         return msg == DN_INPUT ? 0 : 1;
     }
-    if (msg == DN_CLOSE && param1 >= 0) {
+    if (msg == DN_CLOSE) {
         g_copyCancel = true;
         if (g_copyMeter) g_copyMeter->cancelled = true;
-        return 0;
+        // FAR deletes a non-modal dialog only when DN_CLOSE returns non-zero;
+        // the handle dies right after, so nothing may use it anymore
+        if (dlg == g_copyDlg) g_copyDlg = nullptr;
+        return 1;
     }
     if (g_info.DefDlgProc) return g_info.DefDlgProc(dlg, msg, param1, param2);
     return 1;
@@ -956,11 +964,12 @@ bool CopyMeterAborted(CopyMeter* meter, std::wstring& error) {
 }
 
 void CopyMeterEnd() {
+    if (g_copyMeter) PaintCopyDlg(*g_copyMeter, true);
     g_copyMeter = nullptr;
-    if (g_copyDlg && g_copyDlg != INVALID_HANDLE_VALUE) {
-        if (g_info.SendDlgMessage) g_info.SendDlgMessage(g_copyDlg, DM_CLOSE, -1, nullptr);
-        if (g_info.DialogFree) g_info.DialogFree(g_copyDlg);
-    }
+    // DialogFree is a no-op for FDLG_NONMODAL dialogs; DM_CLOSE with an accepted
+    // DN_CLOSE is what actually hides and deletes the dialog from FAR
+    if (g_copyDlg && g_copyDlg != INVALID_HANDLE_VALUE && g_info.SendDlgMessage)
+        g_info.SendDlgMessage(g_copyDlg, DM_CLOSE, -1, nullptr);
     g_copyDlg = nullptr;
     g_copyCancel = false;
     if (g_info.AdvControl)
@@ -1233,14 +1242,10 @@ bool SftpConnection::Authenticate(const StoredServer& server, std::wstring& erro
         return false;
     }
     std::vector<std::wstring> keys = server.identityFiles;
-    if (!server.keyFile.empty()) keys.insert(keys.begin(), server.keyFile);
-    if (keys.empty()) keys = DefaultIdentityFiles();
-    for (const auto& key : keys) {
-        if (TryKeyFile(session, user, key, {}, false)) return true;
-    }
     if (!server.keyFile.empty()) {
-        error = LastError(L"Ключ не принят");
-        return false;
+        bool listed = false;
+        for (const auto& key : keys) listed = listed || key == server.keyFile;
+        if (!listed) keys.insert(keys.begin(), server.keyFile);
     }
     std::wstring secret = server.password;
     if (secret.empty() && !server.vaultPassword.empty())
@@ -1248,13 +1253,26 @@ bool SftpConnection::Authenticate(const StoredServer& server, std::wstring& erro
     if (secret.empty())
         secret = VaultLookupPasswordForHost(server.host, server.user);
     std::string password = Utf8(secret);
-    if (password.empty()) {
-        const std::wstring typed = AskText(L"Пароль сервера", server.host.c_str(), true);
-        password = Utf8(typed);
+
+    for (const auto& key : keys) {
+        if (TryKeyFile(session, user, key, {}, false)) return true;
     }
+    // the saved password goes before the sweep of ~/.ssh: offering foreign keys first
+    // can lock the account out and hides the password failure behind «ключ не принят»
     if (!password.empty() && libssh2_userauth_password(session, user.c_str(), password.c_str()) == 0)
         return true;
-    error = LastError(L"Нет входа по ключу и паролю");
+
+    if (keys.empty()) {
+        for (const auto& key : DefaultIdentityFiles()) {
+            if (TryKeyFile(session, user, key, {}, false)) return true;
+        }
+    }
+    if (password.empty() && server.keyFile.empty()) {
+        password = Utf8(AskText(L"Пароль сервера", server.host.c_str(), true));
+        if (!password.empty() && libssh2_userauth_password(session, user.c_str(), password.c_str()) == 0)
+            return true;
+    }
+    error = LastError(password.empty() ? L"Ключ не принят" : L"Нет входа по ключу и паролю");
     return false;
 }
 
@@ -1429,17 +1447,22 @@ bool SftpConnection::Connect(const StoredServer& server, std::wstring& error) {
     const std::string port = Utf8(server.port.empty() ? L"22" : server.port);
     const bool viaTsh = server.fromTeleport;
     const bool jump = !viaTsh && !server.proxy.empty();
+    const bool exclusive = ExclusiveKey(server);
+    // ssh.exe is started with BatchMode, so it can never type a saved password: hosts that
+    // have one must authenticate through libssh2 instead of failing on keys first
+    const bool viaPipe = !viaTsh && (exclusive || (server.password.empty() && server.vaultPassword.empty()));
     if (viaTsh) {
         if (TshSftpPipe(server, error)) return true;
         Close();
         error.clear();
         if (!TshConnect(server, error)) return false;
-    } else if (OpenSshSftpPipe(server, error)) {
+    } else if (viaPipe && OpenSshSftpPipe(server, error)) {
         return true;
     } else {
-        const bool exclusive = ExclusiveKey(server);
         Close();
-        if (exclusive) {
+        // a denied subsystem is server configuration, not a key problem: even an exclusive
+        // host should get the shell transport instead of giving up on the pipe
+        if (exclusive && !ContainsI(Utf8(error), "subsystem")) {
             if (error.empty()) error = L"SFTP: ключ из vault не принят.";
             return false;
         }
@@ -1489,9 +1512,15 @@ bool SftpConnection::Connect(const StoredServer& server, std::wstring& error) {
     }
     sftp_ = libssh2_sftp_init(session);
     if (!sftp_) {
-        error = LastError(L"SFTP subsystem failed");
-        Close();
-        return false;
+        const std::wstring sftpError = L"SFTP не открыт: в sshd_config нет Subsystem sftp. Проверь: sftp -P " +
+                                        Wide(port.c_str()) + L" " + server.user + L"@" + server.host;
+        std::wstring shellError;
+        if (!StartShellMode(shellError)) {
+            error = sftpError + L" Shell тоже недоступен: " + shellError;
+            Close();
+            return false;
+        }
+        return true;
     }
     char home[1024];
     if (libssh2_sftp_realpath(static_cast<LIBSSH2_SFTP*>(sftp_), ".", home, sizeof(home)) > 0)
@@ -1502,6 +1531,7 @@ bool SftpConnection::Connect(const StoredServer& server, std::wstring& error) {
 }
 
 bool SftpConnection::List(const std::string& path, std::vector<RemoteEntry>& out, std::wstring& error) {
+    if (shellMode_) return ShellList(path, out, error);
     if (pipeSftp_) {
         std::string body;
         PutStr(body, path);
@@ -1600,6 +1630,10 @@ bool SftpConnection::List(const std::string& path, std::vector<RemoteEntry>& out
 bool SftpConnection::Download(const std::string& remote, const std::wstring& local, bool directory, std::wstring& error,
                               CopyMeter* meter) {
     if (CopyMeterAborted(meter, error)) return false;
+    if (shellMode_) {
+        return directory ? ShellDownloadDir(remote, local, meter, error)
+                         : ShellDownload(remote, local, meter, error);
+    }
     if (pipeSftp_ && directory) {
         CreateDirectoryW(local.c_str(), nullptr);
         std::vector<RemoteEntry> entries;
@@ -1721,6 +1755,10 @@ bool SftpConnection::Download(const std::string& remote, const std::wstring& loc
 bool SftpConnection::Upload(const std::wstring& local, const std::string& remote, bool directory, std::wstring& error,
                             CopyMeter* meter) {
     if (CopyMeterAborted(meter, error)) return false;
+    if (shellMode_) {
+        return directory ? ShellUploadDir(local, remote, meter, error)
+                         : ShellUpload(local, remote, meter, error);
+    }
     if (pipeSftp_) {
         const DWORD attr = GetFileAttributesW(local.c_str());
         const bool isDir = directory || (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY));
@@ -1868,6 +1906,7 @@ bool SftpConnection::Upload(const std::wstring& local, const std::string& remote
 }
 
 bool SftpConnection::Mkdir(const std::string& path, std::wstring& error) {
+    if (shellMode_) return ShellMkdir(path, error);
     if (pipeSftp_) {
         std::string body;
         PutStr(body, path);
@@ -1881,6 +1920,7 @@ bool SftpConnection::Mkdir(const std::string& path, std::wstring& error) {
 }
 
 bool SftpConnection::Remove(const std::string& path, bool directory, std::wstring& error) {
+    if (shellMode_) return ShellRemove(path, directory, error);
     if (pipeSftp_) {
         if (directory) {
             std::vector<RemoteEntry> entries;
@@ -1917,6 +1957,7 @@ bool SftpConnection::Remove(const std::string& path, bool directory, std::wstrin
 }
 
 bool SftpConnection::Rename(const std::string& from, const std::string& to, std::wstring& error) {
+    if (shellMode_) return ShellRename(from, to, error);
     if (pipeSftp_) {
         std::string body;
         PutStr(body, from);

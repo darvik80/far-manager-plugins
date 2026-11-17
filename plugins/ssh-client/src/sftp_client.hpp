@@ -49,7 +49,8 @@ public:
     bool Remove(const std::string& path, bool directory, std::wstring& error);
     bool Rename(const std::string& from, const std::string& to, std::wstring& error);
     const std::string& Home() const { return home_; }
-    bool Active() const { return sftp_ != nullptr || pipeSftp_; }
+    bool Active() const { return sftp_ != nullptr || pipeSftp_ || shellMode_; }
+    bool ShellMode() const { return shellMode_; }
 
     HANDLE JumpIn() const { return jumpIn_; }
     HANDLE JumpOut() const { return jumpOut_; }
@@ -76,6 +77,21 @@ private:
     bool PipeSftpInit(std::wstring& error);
     bool PipeSftpCloseHandle(const std::string& handle, std::wstring& error);
 
+    void* ShellOpen(const std::string& command, std::wstring& error);
+    void ShellDrain(void* handle, std::string& out, std::string& errText);
+    int ShellFinish(void* handle, const std::string& errText, std::wstring& error);
+    bool ShellQuery(const std::string& command, std::string& out, std::wstring& error);
+    bool ShellRun(const std::string& command, std::wstring& error);
+    bool ShellMkdir(const std::string& path, std::wstring& error);
+    bool ShellRemove(const std::string& path, bool directory, std::wstring& error);
+    bool ShellRename(const std::string& from, const std::string& to, std::wstring& error);
+    bool StartShellMode(std::wstring& error);
+    bool ShellList(const std::string& path, std::vector<RemoteEntry>& out, std::wstring& error);
+    bool ShellDownload(const std::string& remote, const std::wstring& local, CopyMeter* meter, std::wstring& error);
+    bool ShellUpload(const std::wstring& local, const std::string& remote, CopyMeter* meter, std::wstring& error);
+    bool ShellDownloadDir(const std::string& remote, const std::wstring& local, CopyMeter* meter, std::wstring& error);
+    bool ShellUploadDir(const std::wstring& local, const std::string& remote, CopyMeter* meter, std::wstring& error);
+
     SOCKET sock_ = INVALID_SOCKET;
     HANDLE jumpProcess_ = nullptr;
     HANDLE jumpIn_ = nullptr;
@@ -87,6 +103,7 @@ private:
     std::string home_ = "/";
     bool closing_ = false;
     bool pipeSftp_ = false;
+    bool shellMode_ = false;
     uint32_t sftpNextId_ = 1;
     DWORD jumpWaitMs_ = 25000;
     std::wstring keyCleanup_;

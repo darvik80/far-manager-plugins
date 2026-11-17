@@ -15,6 +15,8 @@ std::wstring TshKnownHostsFile();
 std::wstring TshExe();
 std::wstring TshCluster();
 std::wstring TshProxy();
+std::wstring TshUser();
+bool IsTeleportNode(const std::wstring& host);
 std::vector<StoredServer> TshHosts();
 void TshInvalidate();
 

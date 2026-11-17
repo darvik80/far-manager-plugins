@@ -27,6 +27,7 @@ add_library(${PLUGIN_NAME} SHARED
     src/vault_link.cpp
     src/teleport.cpp
     src/sftp_client.cpp
+    src/shell_client.cpp
     src/panel.cpp
     exports.def
 )

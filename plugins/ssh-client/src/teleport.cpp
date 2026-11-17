@@ -270,6 +270,18 @@ bool TshLogin(std::wstring& error) {
     return TshLoggedIn();
 }
 
+std::wstring TshUser() {
+    RefreshStatus();
+    return g_cache.user;
+}
+
+bool IsTeleportNode(const std::wstring& host) {
+    if (host.empty()) return false;
+    for (const auto& node : TshHosts())
+        if (_wcsicmp(node.host.c_str(), host.c_str()) == 0) return true;
+    return false;
+}
+
 std::vector<StoredServer> TshHosts() {
     if (!RefreshStatus() || !g_cache.present) return {};
     if (g_cache.nodesLoaded) return g_cache.nodes;
@@ -280,7 +292,6 @@ std::vector<StoredServer> TshHosts() {
     if (code != 0) return {};
     StoredServer site;
     site.user = g_cache.user;
-    site.port = L"3022";
     site.fromTeleport = true;
     site.keyLabel = L"teleport";
     std::string line;

@@ -177,15 +177,25 @@ bool SaveServers(const std::vector<StoredServer>& servers) {
 
 std::vector<StoredServer> CombinedSites() {
     std::vector<StoredServer> sites = LoadServers();
+    // a saved copy of a tsh node still belongs to tsh: old builds dropped the flag on save
+    for (auto& site : sites) {
+        if (site.fromTeleport || site.fromConfig) continue;
+        if (!IsTeleportNode(site.host)) continue;
+        site.fromTeleport = true;
+        if (site.user.empty()) site.user = TshUser();
+    }
+
+    for (const auto& host : TshHosts()) {
+        const bool known = std::any_of(sites.begin(), sites.end(), [&](const StoredServer& site) {
+            return Lower(site.name) == Lower(host.name) || Lower(site.host) == Lower(host.host);
+        });
+        if (known) continue;
+        sites.push_back(host);
+    }
     std::vector<std::wstring> names;
     names.reserve(sites.size());
     for (const auto& site : sites) names.push_back(Lower(site.name));
 
-    for (const auto& host : TshHosts()) {
-        if (std::find(names.begin(), names.end(), Lower(host.name)) != names.end()) continue;
-        names.push_back(Lower(host.name));
-        sites.push_back(host);
-    }
     for (const auto& host : LoadSshHosts()) {
         if (std::find(names.begin(), names.end(), Lower(host.alias)) != names.end()) continue;
         StoredServer site;
