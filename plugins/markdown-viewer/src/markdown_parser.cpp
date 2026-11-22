@@ -311,6 +311,465 @@ bool MarkdownParser::IsTableSeparator(const std::wstring& trimmed) {
     return trimmed.find(L'-') != std::wstring::npos;
 }
 
+static std::vector<StyledSegment> MdInline(const std::wstring& text, SegmentStyle headerStyle);
+static bool StartsAt(const std::wstring& text, size_t i, const wchar_t* prefix);
+
+namespace {
+
+struct HtmlTag {
+    std::wstring name;
+    std::map<std::wstring, std::wstring> attrs;
+    bool closing = false;
+    bool selfClosing = false;
+
+    std::wstring Attr(const std::wstring& key) const {
+        const auto it = attrs.find(key);
+        return it == attrs.end() ? std::wstring() : it->second;
+    }
+};
+
+// Tags that live inside a paragraph: they never push their content apart.
+const wchar_t* kInlineTags[] = {
+    L"a", L"abbr", L"b", L"bdi", L"bdo", L"big", L"cite", L"code", L"data", L"del", L"dfn", L"em",
+    L"font", L"i", L"ins", L"kbd", L"label", L"mark", L"nobr", L"q", L"rp", L"rt", L"s", L"samp",
+    L"small", L"span", L"strike", L"strong", L"sub", L"sup", L"time", L"tt", L"u", L"var", L"wbr",
+};
+
+bool IsInlineTag(const std::wstring& name) {
+    for (const wchar_t* tag : kInlineTags)
+        if (name == tag) return true;
+    return false;
+}
+
+size_t FindTextCi(const std::wstring& text, const std::wstring& needle, size_t from) {
+    if (needle.empty() || from > text.size()) return std::wstring::npos;
+    for (size_t i = from; i + needle.size() <= text.size(); ++i)
+        if (_wcsnicmp(text.c_str() + i, needle.c_str(), needle.size()) == 0) return i;
+    return std::wstring::npos;
+}
+
+// Decodes the entity at text[i] ('&'), writing its value to 'out'. Returns the index just
+// after it, or 'i' when this is not an entity.
+size_t DecodeEntityAt(const std::wstring& text, size_t i, std::wstring& out) {
+    struct Named { const wchar_t* name; const wchar_t* value; };
+    static const Named named[] = {
+        { L"amp", L"&" }, { L"lt", L"<" }, { L"gt", L">" }, { L"quot", L"\"" }, { L"apos", L"'" },
+        { L"nbsp", L" " }, { L"ensp", L" " }, { L"emsp", L" " }, { L"thinsp", L" " },
+        { L"shy", L"" }, { L"copy", L"©" }, { L"reg", L"®" }, { L"trade", L"™" },
+        { L"hellip", L"…" }, { L"mdash", L"—" }, { L"ndash", L"–" }, { L"minus", L"−" },
+        { L"middot", L"·" }, { L"bull", L"•" }, { L"deg", L"°" }, { L"plusmn", L"±" },
+        { L"times", L"×" }, { L"div", L"÷" }, { L"laquo", L"«" }, { L"raquo", L"»" },
+        { L"ldquo", L"“" }, { L"rdquo", L"”" }, { L"lsquo", L"‘" }, { L"rsquo", L"’" },
+        { L"prime", L"′" }, { L"Prime", L"″" }, { L"sect", L"§" }, { L"para", L"¶" },
+        { L"dagger", L"†" }, { L"euro", L"€" }, { L"pound", L"£" }, { L"curren", L"¤" },
+        { L"cent", L"¢" }, { L"yen", L"¥" }, { L"copyright", L"©" }, { L"registered", L"®" },
+        { L"larr", L"←" }, { L"rarr", L"→" }, { L"uarr", L"↑" }, { L"darr", L"↓" },
+        { L"harr", L"↔" }, { L"lArr", L"⇐" }, { L"rArr", L"⇒" }, { L"check", L"✓" },
+        { L"cross", L"✗" }, { L"infin", L"∞" }, { L"ne", L"≠" }, { L"le", L"≤" },
+        { L"ge", L"≥" }, { L"micro", L"µ" }, { L"alpha", L"α" }, { L"beta", L"β" },
+        { L"gamma", L"γ" }, { L"delta", L"δ" }, { L"theta", L"θ" }, { L"lambda", L"λ" },
+        { L"mu", L"μ" }, { L"pi", L"π" }, { L"rho", L"ρ" }, { L"sigma", L"σ" },
+        { L"tau", L"τ" }, { L"phi", L"φ" }, { L"psi", L"ψ" }, { L"omega", L"ω" },
+        { L"sum", L"∑" }, { L"radic", L"√" }, { L"iexcl", L"¡" }, { L"iquest", L"¿" },
+    };
+
+    if (i >= text.size() || text[i] != L'&') return i;
+    const size_t semi = text.find(L';', i + 1);
+    if (semi == std::wstring::npos || semi - i > 12) return i;
+    const std::wstring body = text.substr(i + 1, semi - i - 1);
+    if (body.empty()) return i;
+
+    if (body[0] == L'#') {
+        const bool hex = body.size() > 1 && (body[1] == L'x' || body[1] == L'X');
+        const std::wstring digits = hex ? body.substr(2) : body.substr(1);
+        unsigned long cp = 0;
+        for (wchar_t ch : digits) {
+            const int val = iswdigit(ch) ? ch - L'0' : towlower(ch) - L'a' + 10;
+            if (val < 0 || val >= (hex ? 16 : 10)) return i;
+            cp = cp * (hex ? 16u : 10u) + static_cast<unsigned long>(val);
+        }
+        if (digits.empty() || cp == 0 || cp > 0x10FFFF) return i;
+        if (cp < 0x10000) out.push_back(static_cast<wchar_t>(cp));
+        else {
+            const unsigned long surrogate = cp - 0x10000;
+            out.push_back(static_cast<wchar_t>(0xD800 + (surrogate >> 10)));
+            out.push_back(static_cast<wchar_t>(0xDC00 + (surrogate & 0x3FF)));
+        }
+        return semi + 1;
+    }
+
+    for (const auto& entry : named) {
+        if (body == entry.name) {
+            out += entry.value;
+            return semi + 1;
+        }
+    }
+    return i;
+}
+
+std::wstring DecodeEntities(const std::wstring& text) {
+    if (text.find(L'&') == std::wstring::npos) return text;
+    std::wstring out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size();) {
+        const size_t next = DecodeEntityAt(text, i, out);
+        if (next == i) out.push_back(text[i++]);
+        else i = next;
+    }
+    return out;
+}
+
+void ReadHtmlAttrs(const std::wstring& body, HtmlTag& tag) {
+    size_t i = 0;
+    while (i < body.size()) {
+        while (i < body.size() && iswspace(body[i])) ++i;
+        const size_t keyStart = i;
+        while (i < body.size() && body[i] != L'=' && !iswspace(body[i])) ++i;
+        const std::wstring key = ToLower(body.substr(keyStart, i - keyStart));
+        while (i < body.size() && iswspace(body[i])) ++i;
+        std::wstring value;
+        if (i < body.size() && body[i] == L'=') {
+            ++i;
+            while (i < body.size() && iswspace(body[i])) ++i;
+            if (i < body.size() && (body[i] == L'"' || body[i] == L'\'')) {
+                const wchar_t quote = body[i++];
+                const size_t start = i;
+                while (i < body.size() && body[i] != quote) ++i;
+                value = body.substr(start, i - start);
+                if (i < body.size()) ++i;
+            } else {
+                const size_t start = i;
+                while (i < body.size() && !iswspace(body[i])) ++i;
+                value = body.substr(start, i - start);
+            }
+        }
+        if (!key.empty() && key != L"/") tag.attrs[key] = DecodeEntities(value);
+    }
+}
+
+// True only for "<name attrs>", so "a < b", "<wchar_t>" and a stray "<" stay literal text.
+bool ScanHtmlTag(const std::wstring& text, size_t i, HtmlTag& tag, size_t& next) {
+    tag = HtmlTag{};
+    if (i >= text.size() || text[i] != L'<') return false;
+    size_t p = i + 1;
+    if (p < text.size() && text[p] == L'/') {
+        tag.closing = true;
+        ++p;
+    }
+    if (p >= text.size() || !iswalpha(text[p])) return false;
+    const size_t nameStart = p;
+    while (p < text.size() && (iswalnum(text[p]) || text[p] == L'-')) ++p;
+    if (p < text.size() && text[p] != L'>' && text[p] != L'/' && !iswspace(text[p])) return false;
+    const size_t bodyStart = p;
+
+    bool quote = false;
+    wchar_t quoteChar = 0;
+    size_t end = p;
+    for (; end < text.size(); ++end) {
+        const wchar_t ch = text[end];
+        if (quote) {
+            if (ch == quoteChar) quote = false;
+            continue;
+        }
+        if (ch == L'"' || ch == L'\'') {
+            quote = true;
+            quoteChar = ch;
+        } else if (ch == L'<') {
+            return false;
+        } else if (ch == L'>') {
+            break;
+        }
+    }
+    if (end >= text.size()) return false;
+
+    const std::wstring body = text.substr(bodyStart, end - bodyStart);
+    tag.name = ToLower(text.substr(nameStart, p - nameStart));
+    tag.selfClosing = !body.empty() && body.back() == L'/';
+    ReadHtmlAttrs(body, tag);
+    next = end + 1;
+    return true;
+}
+
+std::wstring HtmlCodeLang(const HtmlTag& tag) {
+    std::wstring spec = tag.Attr(L"class");
+    if (spec.empty()) spec = tag.Attr(L"lang");
+    if (spec.empty()) spec = tag.Attr(L"language");
+    size_t i = 0;
+    while (i < spec.size()) {
+        while (i < spec.size() && iswspace(spec[i])) ++i;
+        const size_t start = i;
+        while (i < spec.size() && !iswspace(spec[i])) ++i;
+        const std::wstring token = spec.substr(start, i - start);
+        if (token.rfind(L"language-", 0) == 0) return ToLower(token.substr(9));
+        if (token.rfind(L"lang-", 0) == 0) return ToLower(token.substr(5));
+    }
+    return {};
+}
+
+struct HtmlFrame {
+    std::wstring tag;
+    SegmentStyle style = SegmentStyle::Normal;
+};
+
+SegmentStyle EffectiveStyle(const std::vector<HtmlFrame>& stack, SegmentStyle headerStyle) {
+    for (size_t i = stack.size(); i > 0; --i)
+        if (stack[i - 1].style != SegmentStyle::Normal) return stack[i - 1].style;
+    return headerStyle;
+}
+
+// Raw HTML inside a paragraph (CommonMark 6.8, GFM keeps it too): known tags become the
+// matching colour, unknown ones lose their brackets, and the text between them is still markdown.
+std::vector<StyledSegment> HtmlInline(const std::wstring& text, SegmentStyle headerStyle) {
+    // A '<' that opens no tag ("a < b") leaves the whole line to the markdown scanner, so
+    // entities inside a `code span` there stay literal.
+    bool hasTag = false;
+    for (size_t p = text.find(L'<'); p != std::wstring::npos; p = text.find(L'<', p + 1)) {
+        HtmlTag probe;
+        size_t next = 0;
+        if (ScanHtmlTag(text, p, probe, next)) {
+            hasTag = true;
+            break;
+        }
+    }
+    if (!hasTag) return MdInline(text, headerStyle);
+
+    std::vector<StyledSegment> out;
+    std::vector<HtmlFrame> stack;
+    std::wstring plain;
+    std::wstring linkHint;
+    bool verbatim = false;
+
+    auto flush = [&] {
+        if (!plain.empty()) {
+            if (verbatim) {
+                out.push_back(StyledSegment(plain, SegmentStyle::Code, linkHint));
+            } else {
+                for (auto& seg : MdInline(plain, headerStyle)) {
+                    if (seg.style == SegmentStyle::Normal) seg.style = EffectiveStyle(stack, headerStyle);
+                    if (!linkHint.empty()) {
+                        seg.style = SegmentStyle::Link;
+                        seg.hint = linkHint;
+                    }
+                    out.push_back(seg);
+                }
+            }
+        }
+        plain.clear();
+    };
+
+    size_t i = 0;
+    while (i < text.size()) {
+        // A code span wins over raw HTML: `Plugins/<Name>` keeps its angle brackets.
+        if (text[i] == L'`') {
+            const size_t end = text.find(L'`', i + 1);
+            if (end != std::wstring::npos) {
+                plain.append(text, i, end - i + 1);
+                i = end + 1;
+                continue;
+            }
+        }
+        if (text[i] != L'<') {
+            const size_t next = verbatim ? i : DecodeEntityAt(text, i, plain);
+            if (next > i) i = next;
+            else plain.push_back(text[i++]);
+            continue;
+        }
+
+        if (StartsAt(text, i + 1, L"http://") || StartsAt(text, i + 1, L"https://")) {
+            const size_t end = text.find(L'>', i + 1);
+            if (end != std::wstring::npos) {
+                flush();
+                const std::wstring url = text.substr(i + 1, end - i - 1);
+                out.push_back(StyledSegment(url, SegmentStyle::Link, url));
+                i = end + 1;
+                continue;
+            }
+        }
+
+        HtmlTag tag;
+        size_t after = 0;
+        if (!ScanHtmlTag(text, i, tag, after)) {
+            plain.push_back(text[i++]);
+            continue;
+        }
+        flush();
+
+        if (tag.name == L"br") {
+            if (!tag.closing) out.push_back(StyledSegment(L" ", SegmentStyle::Break));
+            i = after;
+            continue;
+        }
+        if (tag.name == L"hr" || tag.name == L"wbr") {
+            if (!tag.closing) plain += L' ';
+            i = after;
+            continue;
+        }
+        if (tag.name == L"img") {
+            if (!tag.closing) {
+                const std::wstring src = tag.Attr(L"src");
+                std::wstring alt = tag.Attr(L"alt");
+                if (alt.empty()) alt = src.empty() ? L"image" : src;
+                out.push_back(StyledSegment(L"[img] " + alt, SegmentStyle::Image, src));
+            }
+            i = after;
+            continue;
+        }
+        if (tag.name == L"a") {
+            if (tag.closing) linkHint.clear();
+            else if (!tag.selfClosing) linkHint = tag.Attr(L"href");
+            i = after;
+            continue;
+        }
+        if (tag.name == L"script" || tag.name == L"style") {
+            if (!tag.closing) {
+                const size_t end = FindTextCi(text, L"</" + tag.name, after);
+                i = end == std::wstring::npos ? text.size() : end;
+                continue;
+            }
+            i = after;
+            continue;
+        }
+
+        SegmentStyle style = SegmentStyle::Normal;
+        if (tag.name == L"b" || tag.name == L"strong") style = SegmentStyle::Bold;
+        else if (tag.name == L"i" || tag.name == L"em" || tag.name == L"cite" ||
+                 tag.name == L"var" || tag.name == L"dfn") style = SegmentStyle::Italic;
+        else if (tag.name == L"code" || tag.name == L"kbd" || tag.name == L"samp" ||
+                 tag.name == L"tt") style = SegmentStyle::Code;
+        else if (tag.name == L"s" || tag.name == L"del" || tag.name == L"strike") style = SegmentStyle::Strike;
+
+        if (style != SegmentStyle::Normal) {
+            if (tag.closing) {
+                for (size_t n = stack.size(); n > 0; --n) {
+                    if (stack[n - 1].tag == tag.name) {
+                        stack.resize(n - 1);
+                        break;
+                    }
+                }
+            } else if (!tag.selfClosing) {
+                HtmlFrame frame;
+                frame.tag = tag.name;
+                frame.style = style;
+                stack.push_back(frame);
+            }
+            verbatim = EffectiveStyle(stack, headerStyle) == SegmentStyle::Code;
+            i = after;
+            continue;
+        }
+
+        // Block, table and layout tags carry no colour of their own; separate their content
+        // so adjacent cells do not run into one word.
+        if (!tag.closing && !IsInlineTag(tag.name) && (!plain.empty() || !out.empty())) plain += L' ';
+        i = after;
+    }
+    flush();
+    return out;
+}
+
+}  // namespace
+
+// Up to three leading spaces still open an HTML block (CommonMark 4.6).
+MarkdownParser::HtmlPeel MarkdownParser::PeelHtml(const std::wstring& raw, std::wstring& code, std::wstring& tail) {
+    if (htmlHidden_) {
+        const size_t end = FindTextCi(raw, htmlHiddenEnd_, 0);
+        if (end == std::wstring::npos) return HtmlPeel::Skip;
+        tail = Trim(raw.substr(end + htmlHiddenEnd_.size()));
+        htmlHidden_ = false;
+        htmlHiddenEnd_.clear();
+        return HtmlPeel::Skip;
+    }
+    if (htmlPre_) {
+        const size_t end = FindTextCi(raw, L"</pre", 0);
+        const size_t codeEnd = FindTextCi(raw, L"</code", 0);
+        const size_t cut = (std::min)(end, codeEnd);
+        if (cut == std::wstring::npos) {
+            code = TrimRight(raw);
+            return code.empty() ? HtmlPeel::Skip : HtmlPeel::Code;
+        }
+        code = TrimRight(raw.substr(0, cut));
+        if (end != std::wstring::npos) {
+            const size_t close = raw.find(L'>', end);
+            htmlPre_ = false;
+            htmlPreLanguage_.clear();
+            if (close != std::wstring::npos) tail = Trim(raw.substr(close + 1));
+        }
+        return code.empty() ? HtmlPeel::Skip : HtmlPeel::Code;
+    }
+
+    const std::wstring trimmed = Trim(raw);
+    if (trimmed.size() < 2 || trimmed[0] != L'<') return HtmlPeel::None;
+
+    if (StartsAt(trimmed, 0, L"<!--")) {
+        if (trimmed.find(L"-->") == std::wstring::npos) {
+            htmlHidden_ = true;
+            htmlHiddenEnd_ = L"-->";
+        }
+        return HtmlPeel::Skip;
+    }
+
+    HtmlTag tag;
+    size_t after = 0;
+    if (!ScanHtmlTag(trimmed, 0, tag, after) || tag.closing) return HtmlPeel::None;
+
+    // <a name="x"></a> is the legacy form of a link target: no text of its own, and the
+    // following line is what a jump to #x should land on.
+    if (tag.name == L"a") {
+        std::wstring id = tag.Attr(L"id");
+        if (id.empty()) id = tag.Attr(L"name");
+        const size_t close = FindTextCi(trimmed, L"</a", after);
+        if (!id.empty() && close != std::wstring::npos && Trim(trimmed.substr(after, close - after)).empty()) {
+            const size_t gt = trimmed.find(L'>', close);
+            tail = gt == std::wstring::npos ? std::wstring() : Trim(trimmed.substr(gt + 1));
+            const size_t inner = FindTextCi(tail, L"</a", 0);
+            if (inner != std::wstring::npos) {
+                const size_t rest = tail.find(L'>', inner);
+                if (rest != std::wstring::npos) tail = Trim(tail.substr(rest + 1));
+            }
+            htmlAnchorPending_ = id;
+            return HtmlPeel::Skip;
+        }
+        return HtmlPeel::None;
+    }
+
+    if (tag.name == L"script" || tag.name == L"style" || tag.name == L"textarea") {
+        if (FindTextCi(trimmed, L"</" + tag.name, after) == std::wstring::npos) {
+            htmlHidden_ = true;
+            htmlHiddenEnd_ = L"</" + tag.name + L">";
+        }
+        return HtmlPeel::Skip;
+    }
+
+    if (tag.name != L"pre") return HtmlPeel::None;
+
+    htmlPreLanguage_ = HtmlCodeLang(tag);
+    std::wstring body = TrimLeft(trimmed.substr(after));
+    HtmlTag inner;
+    size_t innerAfter = 0;
+    if (ScanHtmlTag(body, 0, inner, innerAfter) && inner.name == L"code") {
+        if (htmlPreLanguage_.empty()) htmlPreLanguage_ = HtmlCodeLang(inner);
+        body = TrimLeft(body.substr(innerAfter));
+    }
+    size_t stop = FindTextCi(body, L"</pre", 0);
+    const size_t codeEnd = FindTextCi(body, L"</code", 0);
+    if (codeEnd != std::wstring::npos && (stop == std::wstring::npos || codeEnd < stop)) stop = codeEnd;
+    if (stop == std::wstring::npos) {
+        htmlPre_ = true;
+    } else {
+        const size_t close = body.find(L'>', stop);
+        if (close == std::wstring::npos) {
+            htmlPre_ = true;
+        } else {
+            tail = Trim(body.substr(close + 1));
+            body = TrimRight(body.substr(0, stop));
+        }
+    }
+    if (!Trim(body).empty()) {
+        code = body;
+        return HtmlPeel::Code;
+    }
+    return HtmlPeel::Skip;
+}
+
 LineStyle MarkdownParser::DetectLineStyle(const std::wstring& line) {
     fenceKind_ = 0;
     std::wstring trimmed = Trim(line);
@@ -337,6 +796,17 @@ LineStyle MarkdownParser::DetectLineStyle(const std::wstring& line) {
 
     if (IsHorizontalRule(trimmed))
         return LineStyle::HorizontalRule;
+
+    if (trimmed[0] == L'<') {
+        HtmlTag tag;
+        size_t after = 0;
+        if (ScanHtmlTag(trimmed, 0, tag, after) && !tag.closing) {
+            if (tag.name == L"hr") return LineStyle::HorizontalRule;
+            if (tag.name.size() == 2 && tag.name[0] == L'h' && tag.name[1] >= L'1' && tag.name[1] <= L'6')
+                return static_cast<LineStyle>(static_cast<int>(LineStyle::Header1) + (tag.name[1] - L'1'));
+            if (tag.name == L"li") return LineStyle::UnorderedList;
+        }
+    }
 
     if (trimmed[0] == L'#') {
         int hashes = CountLeading(trimmed, L'#');
@@ -377,6 +847,25 @@ LineStyle MarkdownParser::DetectLineStyle(const std::wstring& line) {
 
 std::wstring MarkdownParser::StripMarkdownSyntax(const std::wstring& line, LineStyle style) {
     std::wstring trimmed = Trim(line);
+
+    const bool header = style >= LineStyle::Header1 && style <= LineStyle::Header6;
+    if (trimmed.size() > 1 && trimmed[0] == L'<' && (header || style == LineStyle::Normal ||
+                                                     style == LineStyle::UnorderedList ||
+                                                     style == LineStyle::HorizontalRule)) {
+        HtmlTag tag;
+        size_t after = 0;
+        if (ScanHtmlTag(trimmed, 0, tag, after) && !tag.closing &&
+            (tag.name == L"hr" || tag.name == L"li" ||
+             (tag.name.size() == 2 && tag.name[0] == L'h' && tag.name[1] >= L'1' && tag.name[1] <= L'6'))) {
+            if (tag.name == L"hr") return std::wstring();
+            htmlAnchor_ = tag.Attr(L"id");
+            if (htmlAnchor_.empty()) htmlAnchor_ = tag.Attr(L"name");
+            std::wstring body = trimmed.substr(after);
+            const size_t close = FindTextCi(body, L"</" + tag.name, 0);
+            if (close != std::wstring::npos) body = body.substr(0, close);
+            return Trim(body);
+        }
+    }
 
     switch (style) {
         case LineStyle::Header1:
@@ -462,22 +951,8 @@ static size_t ScanBareUrl(const std::wstring& text, size_t i) {
     return j;
 }
 
-std::vector<StyledSegment> MarkdownParser::ParseInlineFormatting(const std::wstring& text, LineStyle lineStyle) {
+static std::vector<StyledSegment> MdInline(const std::wstring& text, SegmentStyle headerStyle) {
     std::vector<StyledSegment> segments;
-
-    if (lineStyle == LineStyle::CodeBlock) {
-        segments.push_back(StyledSegment(text, SegmentStyle::CodeBlock));
-        return segments;
-    }
-
-    if (lineStyle == LineStyle::HorizontalRule) {
-        segments.push_back(StyledSegment(text, SegmentStyle::HorizontalRule));
-        return segments;
-    }
-
-    SegmentStyle headerStyle = (lineStyle >= LineStyle::Header1 && lineStyle <= LineStyle::Header6)
-        ? SegmentStyle::Header : SegmentStyle::Normal;
-
     size_t i = 0;
     std::wstring currentText;
 
@@ -636,6 +1111,20 @@ std::vector<StyledSegment> MarkdownParser::ParseInlineFormatting(const std::wstr
     }
 
     return segments;
+}
+
+std::vector<StyledSegment> MarkdownParser::ParseInlineFormatting(const std::wstring& text, LineStyle lineStyle) {
+    if (lineStyle == LineStyle::CodeBlock)
+        return { StyledSegment(text, SegmentStyle::CodeBlock) };
+    if (lineStyle == LineStyle::HorizontalRule)
+        return { StyledSegment(text, SegmentStyle::HorizontalRule) };
+
+    const SegmentStyle headerStyle = (lineStyle >= LineStyle::Header1 && lineStyle <= LineStyle::Header6)
+        ? SegmentStyle::Header : SegmentStyle::Normal;
+
+    // A line holding nothing but markup yields no segments: Parse drops it.
+    return text.find(L'<') == std::wstring::npos ? MdInline(text, headerStyle)
+                                                 : HtmlInline(text, headerStyle);
 }
 
 std::vector<StyledSegment> MarkdownParser::HighlightCode(const std::wstring& code, const std::wstring& language) {
@@ -799,12 +1288,87 @@ std::vector<StyledSegment> MarkdownParser::HighlightCode(const std::wstring& cod
     return segments;
 }
 
+void MarkdownParser::FlushBreaks(std::vector<StyledLine>& result, StyledLine&& line) {
+    bool hasBreak = false;
+    for (const auto& seg : line.segments) {
+        if (seg.style == SegmentStyle::Break) { hasBreak = true; break; }
+    }
+    if (!hasBreak) {
+        result.push_back(std::move(line));
+        return;
+    }
+
+    std::vector<StyledSegment> run;
+    for (auto& seg : line.segments) {
+        if (seg.style != SegmentStyle::Break) {
+            run.push_back(std::move(seg));
+            continue;
+        }
+        StyledLine part;
+        part.style = line.style;
+        part.indent = line.indent;
+        part.fence = line.fence;
+        part.codeLanguage = line.codeLanguage;
+        part.segments = std::move(run);
+        run.clear();
+        result.push_back(std::move(part));
+    }
+    StyledLine last;
+    last.style = line.style;
+    last.indent = line.indent;
+    last.fence = line.fence;
+    last.codeLanguage = line.codeLanguage;
+    last.segments = std::move(run);
+    result.push_back(std::move(last));
+}
+
 std::vector<StyledLine> MarkdownParser::Parse(const std::vector<std::wstring>& lines) {
     std::vector<StyledLine> result;
     inCodeBlock_ = false;
+    fenceKind_ = 0;
     currentCodeLanguage_.clear();
+    htmlHidden_ = false;
+    htmlHiddenEnd_.clear();
+    htmlPre_ = false;
+    htmlPreLanguage_.clear();
+    htmlAnchor_.clear();
+    htmlAnchorPending_.clear();
 
-    for (const auto& line : lines) {
+    auto takeAnchor = [&](StyledLine& styled) {
+        if (!htmlAnchor_.empty()) {
+            styled.anchor = htmlAnchor_;
+            htmlAnchor_.clear();
+            return;
+        }
+        if (htmlAnchorPending_.empty() || styled.style == LineStyle::Empty) return;
+        styled.anchor = htmlAnchorPending_;
+        htmlAnchorPending_.clear();
+    };
+
+    for (const auto& src : lines) {
+        std::wstring line = src;
+        htmlAnchor_.clear();
+
+        if (!inCodeBlock_) {
+            std::wstring code;
+            std::wstring tail;
+            const HtmlPeel peel = PeelHtml(line, code, tail);
+            if (peel != HtmlPeel::None) {
+                if (peel == HtmlPeel::Code) {
+                    StyledLine styled;
+                    styled.style = LineStyle::CodeBlock;
+                    styled.codeLanguage = htmlPreLanguage_;
+                    styled.segments = htmlPreLanguage_.empty()
+                        ? std::vector<StyledSegment>{ StyledSegment(code, SegmentStyle::CodeBlock) }
+                        : HighlightCode(code, htmlPreLanguage_);
+                    takeAnchor(styled);
+                    result.push_back(std::move(styled));
+                }
+                if (tail.empty()) continue;
+                line = tail;
+            }
+        }
+
         LineStyle style = DetectLineStyle(line);
         std::wstring strippedText = StripMarkdownSyntax(line, style);
 
@@ -861,8 +1425,44 @@ std::vector<StyledLine> MarkdownParser::Parse(const std::vector<std::wstring>& l
             }
         }
 
-        result.push_back(styledLine);
+        if (fenceKind_ == 0 && styledLine.segments.empty() && !strippedText.empty())
+            continue;   // a line that is only markup tags paints nothing
+
+        takeAnchor(styledLine);
+        FlushBreaks(result, std::move(styledLine));
     }
 
     return result;
+}
+
+std::wstring AnchorSlug(const std::wstring& text) {
+    std::wstring out;
+    for (wchar_t ch : Trim(text)) {
+        if (iswspace(ch)) {
+            out.push_back(L'-');
+            continue;
+        }
+        if (IsIdentChar(ch) || ch == L'-') out.push_back(static_cast<wchar_t>(towlower(ch)));
+    }
+    return out;
+}
+
+std::vector<std::pair<std::wstring, size_t>> BuildAnchors(const std::vector<StyledLine>& lines) {
+    std::vector<std::pair<std::wstring, size_t>> anchors;
+    std::map<std::wstring, int> seen;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const StyledLine& line = lines[i];
+        const std::wstring explicitId = ToLower(Trim(line.anchor));
+        if (!explicitId.empty()) anchors.emplace_back(explicitId, i);
+        if (line.fence || line.style < LineStyle::Header1 || line.style > LineStyle::Header6)
+            continue;
+        std::wstring text;
+        for (const auto& seg : line.segments) text += seg.text;
+        std::wstring slug = AnchorSlug(text);
+        if (slug.empty()) continue;
+        const int count = seen[slug]++;
+        if (count > 0) slug += L"-" + std::to_wstring(count);
+        anchors.emplace_back(slug, i);
+    }
+    return anchors;
 }

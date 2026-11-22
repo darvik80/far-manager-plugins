@@ -26,11 +26,23 @@ struct ViewerCell {
 
 struct ViewerRow {
     size_t source = 0;
+    size_t origin = 0;
     wchar_t pin = 0;
     FarColor pinColor{};
     std::vector<ViewerCell> cells;
     bool scrollable = false;
 };
+
+// A caret between two cells of a parsed line: re-wrapping the text keeps the selection,
+// because neither the source line nor the cell offsets depend on the console width.
+struct SelPoint {
+    size_t source = 0;
+    size_t cell = 0;
+};
+
+static bool Before(const SelPoint& a, const SelPoint& b) {
+    return a.source < b.source || (a.source == b.source && a.cell < b.cell);
+}
 
 struct ViewerState {
     const PluginStartupInfo* info = nullptr;
@@ -38,6 +50,16 @@ struct ViewerState {
     std::wstring title;
     std::wstring status;
     std::wstring query;
+    std::wstring filepath;
+    std::wstring note;
+    std::vector<std::pair<std::wstring, size_t>> anchors;
+    std::vector<size_t> history;
+    size_t linkPick = 0;
+    bool hasSel = false;
+    SelPoint selAnchor;
+    SelPoint selCaret;
+    bool dragging = false;
+    bool dragged = false;
     std::vector<FAR_CHAR_INFO> buffer;
     std::vector<ViewerRow> visuals;
     size_t topLine = 0;
@@ -498,6 +520,7 @@ static void AppendVisuals(ViewerState* state, size_t index) {
     auto push = [&](size_t from, size_t to, bool first) {
         ViewerRow row;
         row.source = index;
+        row.origin = from;
         row.scrollable = scrollable;
         if (first) {
             row.pin = pin;
@@ -575,6 +598,23 @@ static void EnsureVisuals(ViewerState* state) {
         state->topVisual = state->currentVisual - static_cast<size_t>(state->viewHeight) + 1;
 }
 
+// Cell range of one visual row covered by the selection, indexed into row.cells.
+static bool RowSelection(const ViewerState& state, const ViewerRow& row, size_t& lo, size_t& hi) {
+    if (!state.hasSel) return false;
+    SelPoint from = state.selAnchor;
+    SelPoint to = state.selCaret;
+    if (Before(to, from))
+        std::swap(from, to);
+    if (row.source < from.source || row.source > to.source) return false;
+    const size_t begin = row.source == from.source ? from.cell : row.origin;
+    const size_t end = row.source == to.source ? to.cell : row.origin + row.cells.size();
+    lo = begin > row.origin ? begin - row.origin : 0;
+    hi = end > row.origin ? end - row.origin : 0;
+    if (hi > row.cells.size()) hi = row.cells.size();
+    if (lo > hi) lo = hi;
+    return lo < hi;
+}
+
 static void RenderBuffer(ViewerState* state) {
     if (state->viewWidth <= 0 || state->viewHeight <= 0) return;
     const int width = state->viewWidth;
@@ -606,23 +646,70 @@ static void RenderBuffer(ViewerState* state) {
         }
 
         const int origin = visual.scrollable ? state->hScroll : 0;
+        size_t selLo = 0;
+        size_t selHi = 0;
+        const bool selected = RowSelection(*state, visual, selLo, selHi);
         int x = 1;
         for (int i = origin; i < static_cast<int>(visual.cells.size()) && x < width; ++i, ++x) {
             const ViewerCell& cell = visual.cells[static_cast<size_t>(i)];
             dest[x].Char = cell.ch;
             FarColor color = cell.color;
             color.BackgroundColor = CurrentBg(color.BackgroundColor, current);
+            if (selected && static_cast<size_t>(i) >= selLo && static_cast<size_t>(i) < selHi)
+                std::swap(color.ForegroundColor, color.BackgroundColor);
             dest[x].Attributes = color;
         }
     }
 }
+
+// Links the viewer can actually follow: a fragment of this file or a path to another one.
+static bool IsExternal(const std::wstring& target) {
+    return target.find(L"://") != std::wstring::npos || target.rfind(L"mailto:", 0) == 0;
+}
+
+static bool Followable(const StyledSegment& seg) {
+    if (seg.hint.empty()) return false;
+    if (seg.style != SegmentStyle::Link && seg.style != SegmentStyle::Image) return false;
+    return seg.hint[0] == L'#' || !IsExternal(seg.hint);
+}
+
+static std::vector<const StyledSegment*> LinksOn(ViewerState* state) {
+    std::vector<const StyledSegment*> links;
+    if (!state->lines || state->currentLine >= state->lines->size()) return links;
+    for (const auto& seg : (*state->lines)[state->currentLine].segments)
+        if (Followable(seg)) links.push_back(&seg);
+    return links;
+}
+
+static bool FindAnchor(ViewerState* state, const std::wstring& fragment, size_t& source) {
+    const std::wstring needle = AnchorSlug(fragment);
+    if (needle.empty()) return false;
+    for (const auto& anchor : state->anchors) {
+        if (anchor.first == needle) {
+            source = anchor.second;
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t SelectionSize(ViewerState* state);
+static void ClearSel(ViewerState* state);
 
 static void UpdateStatus(ViewerState* state, HANDLE hDlg) {
     const size_t total = state->lines ? state->lines->size() : 0;
     const size_t current = total == 0 ? 0 : state->currentLine + 1;
     state->status = L" " + std::to_wstring(current) + L" / " + std::to_wstring(total);
     state->status += L"   " + std::wstring(Th().name);
-    if (state->lines && state->currentLine < state->lines->size()) {
+
+    const auto links = LinksOn(state);
+    if (!links.empty()) {
+        if (state->linkPick >= links.size()) state->linkPick = 0;
+        std::wstring target = links[state->linkPick]->hint;
+        if (target.size() > 48) target.resize(48);
+        state->status += L"   [" + std::to_wstring(state->linkPick + 1) + L"/" +
+                         std::to_wstring(links.size()) + L"] " + target;
+    } else if (state->lines && state->currentLine < state->lines->size()) {
         std::wstring hints;
         for (const auto& seg : (*state->lines)[state->currentLine].segments) {
             if (seg.hint.empty()) continue;
@@ -633,14 +720,22 @@ static void UpdateStatus(ViewerState* state, HANDLE hDlg) {
         if (hints.size() > 80) hints.resize(80);
         if (!hints.empty()) state->status += L"   " + hints;
     }
+    if (!state->note.empty()) state->status += L"   ! " + state->note;
     if (state->rawMode) state->status += L"   RAW";
     if (!state->query.empty()) state->status += L"   /" + state->query;
-    state->status += L"    F7 find    F8 theme    Ctrl+\x2191\x2193 headings    Esc";
+    const size_t sel = SelectionSize(state);
+    if (sel) state->status += L"   sel " + std::to_wstring(sel);
+    state->status += L"    F7 find    F8 theme    Ctrl+\x2191\x2193 headings";
+    if (!links.empty()) state->status += L"    Enter go    Tab pick";
+    if (!state->history.empty()) state->status += L"    Backspace back";
+    state->status += sel ? L"    Ctrl+Ins copy" : L"    mouse/Shift select";
+    state->status += L"    Esc";
     if (hDlg)
         state->info->SendDlgMessage(hDlg, DM_SETTEXTPTR, 2, const_cast<wchar_t*>(state->status.c_str()));
 }
 
 static void MoveVisual(ViewerState* state, size_t next, HANDLE hDlg) {
+    const size_t previous = state->currentLine;
     const bool rebuild = state->builtWidth != state->viewWidth || state->builtRaw != state->rawMode || state->visuals.empty();
     EnsureVisuals(state);
     if (state->visuals.empty()) return;
@@ -649,6 +744,8 @@ static void MoveVisual(ViewerState* state, size_t next, HANDLE hDlg) {
         state->currentVisual = next;
     }
     state->currentLine = state->visuals[state->currentVisual].source;
+    state->note.clear();
+    if (state->currentLine != previous) state->linkPick = 0;
     if (state->currentVisual < state->topVisual)
         state->topVisual = state->currentVisual;
     if (state->viewHeight > 0 &&
@@ -669,6 +766,7 @@ static void MoveVisual(ViewerState* state, size_t next, HANDLE hDlg) {
 }
 
 static void GoSource(ViewerState* state, size_t source, HANDLE hDlg) {
+    ClearSel(state);
     EnsureVisuals(state);
     for (size_t i = 0; i < state->visuals.size(); ++i) {
         if (state->visuals[i].source == source) {
@@ -676,6 +774,317 @@ static void GoSource(ViewerState* state, size_t source, HANDLE hDlg) {
             return;
         }
     }
+}
+
+static void Say(ViewerState* state, HANDLE hDlg, const std::wstring& note) {
+    state->note = note;
+    UpdateStatus(state, hDlg);
+    if (hDlg)
+        state->info->SendDlgMessage(hDlg, DM_REDRAW, 0, nullptr);
+}
+
+static void ClearSel(ViewerState* state) {
+    state->hasSel = false;
+    state->dragging = false;
+}
+
+static bool RowOfPoint(const ViewerState& state, const SelPoint& p, size_t& vIdx, size_t& local) {
+    size_t last = static_cast<size_t>(-1);
+    for (size_t i = 0; i < state.visuals.size(); ++i) {
+        const ViewerRow& row = state.visuals[i];
+        if (row.source != p.source) {
+            if (last != static_cast<size_t>(-1)) break;
+            continue;
+        }
+        last = i;
+        const size_t end = row.origin + row.cells.size();
+        if (p.cell >= row.origin && p.cell <= end) {
+            vIdx = i;
+            local = p.cell - row.origin;
+            return true;
+        }
+    }
+    if (last == static_cast<size_t>(-1)) return false;
+    vIdx = last;
+    local = state.visuals[last].cells.size();
+    return true;
+}
+
+// Put the selection caret on a visual row column, scrolling the view to keep it visible.
+static void SetCaret(ViewerState* state, HANDLE hDlg, size_t vIdx, size_t local, bool resetAnchor) {
+    EnsureVisuals(state);
+    if (state->visuals.empty()) return;
+    if (vIdx >= state->visuals.size()) vIdx = state->visuals.size() - 1;
+    const ViewerRow& row = state->visuals[vIdx];
+    if (local > row.cells.size()) local = row.cells.size();
+    if (row.scrollable) {
+        const int chunk = state->viewWidth > 1 ? state->viewWidth - 1 : 1;
+        if (static_cast<int>(local) < state->hScroll) state->hScroll = static_cast<int>(local);
+        else if (static_cast<int>(local) >= state->hScroll + chunk)
+            state->hScroll = static_cast<int>(local) - chunk + 1;
+    }
+    state->hasSel = true;
+    state->selCaret = SelPoint{ row.source, row.origin + local };
+    if (resetAnchor) state->selAnchor = state->selCaret;
+    MoveVisual(state, vIdx, hDlg);
+}
+
+enum class SelMove { Left, Right, Up, Down, RowStart, RowEnd, PageUp, PageDown };
+
+static void ExtendSel(ViewerState* state, HANDLE hDlg, SelMove move) {
+    EnsureVisuals(state);
+    if (state->visuals.empty()) return;
+    size_t v = state->currentVisual;
+    size_t local = 0;
+    if (!state->hasSel || !RowOfPoint(*state, state->selCaret, v, local)) {
+        state->hasSel = true;
+        state->selAnchor = SelPoint{ state->visuals[v].source, state->visuals[v].origin + local };
+    }
+    const int page = state->viewHeight > 0 ? state->viewHeight : 1;
+    size_t next = v;
+    size_t nextLocal = local;
+    switch (move) {
+        case SelMove::Left:
+            if (nextLocal > 0) --nextLocal;
+            else if (next > 0) { --next; nextLocal = state->visuals[next].cells.size(); }
+            break;
+        case SelMove::Right:
+            if (nextLocal < state->visuals[next].cells.size()) ++nextLocal;
+            else if (next + 1 < state->visuals.size()) { ++next; nextLocal = 0; }
+            break;
+        case SelMove::Up:
+            if (next > 0) --next;
+            break;
+        case SelMove::Down:
+            if (next + 1 < state->visuals.size()) ++next;
+            break;
+        case SelMove::PageUp:
+            next = next > static_cast<size_t>(page) ? next - page : 0;
+            break;
+        case SelMove::PageDown:
+            next += static_cast<size_t>(page);
+            break;
+        case SelMove::RowStart:
+            nextLocal = 0;
+            break;
+        case SelMove::RowEnd:
+            nextLocal = state->visuals[next].cells.size();
+            break;
+    }
+    SetCaret(state, hDlg, next, nextLocal, false);
+}
+
+static size_t SelectionSize(ViewerState* state) {
+    if (!state->hasSel) return 0;
+    size_t chars = 0;
+    size_t lines = 0;
+    size_t lastSource = static_cast<size_t>(-1);
+    size_t lo = 0;
+    size_t hi = 0;
+    for (const auto& row : state->visuals) {
+        if (!RowSelection(*state, row, lo, hi)) continue;
+        chars += hi - lo;
+        if (row.source != lastSource) { ++lines; lastSource = row.source; }
+    }
+    return chars + (lines > 1 ? lines - 1 : 0);
+}
+
+static std::wstring CopyableLine(ViewerState* state, size_t source, const std::wstring& text, bool fromStart) {
+    std::wstring out = text;
+    // The renderer keeps one blank column between the frame and the code; it is not indentation.
+    if (fromStart && !out.empty() && out[0] == L' ' && source < state->lines->size() &&
+        (*state->lines)[source].style == LineStyle::CodeBlock)
+        out.erase(0, 1);
+    // Decoration the renderer paints, not text of the document: the rules that head a fence,
+    // a table or a heading, and the quote bars on the left of a blockquote.
+    size_t b = out.size();
+    while (b > 0 && out[b - 1] == L'─') --b;
+    out.resize(b);
+    if (source < state->lines->size() && (*state->lines)[source].style == LineStyle::Blockquote) {
+        size_t a = 0;
+        while (a < out.size() && (out[a] == L'│' || out[a] == L' ')) ++a;
+        out.erase(0, a);
+    }
+    return out;
+}
+
+static std::wstring SelectionText(ViewerState* state) {
+    std::wstring out;
+    std::wstring line;
+    size_t lastSource = static_cast<size_t>(-1);
+    bool fromStart = false;
+    size_t lo = 0;
+    size_t hi = 0;
+    for (size_t i = 0; i < state->visuals.size(); ++i) {
+        const ViewerRow& row = state->visuals[i];
+        if (!RowSelection(*state, row, lo, hi)) continue;
+        if (row.source != lastSource) {
+            if (lastSource != static_cast<size_t>(-1)) out += CopyableLine(state, lastSource, line, fromStart) + L"\n";
+            lastSource = row.source;
+            line.clear();
+            fromStart = lo == 0 && (i == 0 || state->visuals[i - 1].source != row.source);
+        }
+        for (size_t j = lo; j < hi; ++j) line.push_back(row.cells[j].ch);
+    }
+    if (lastSource != static_cast<size_t>(-1)) out += CopyableLine(state, lastSource, line, fromStart);
+    return out;
+}
+
+static bool PutClipboard(const std::wstring& text) {
+    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!mem) return false;
+    wchar_t* dst = static_cast<wchar_t*>(GlobalLock(mem));
+    if (!dst) {
+        GlobalFree(mem);
+        return false;
+    }
+    wmemcpy(dst, text.c_str(), text.size() + 1);
+    GlobalUnlock(mem);
+    if (!OpenClipboard(nullptr)) {
+        GlobalFree(mem);
+        return false;
+    }
+    EmptyClipboard();
+    const bool ok = SetClipboardData(CF_UNICODETEXT, mem) != nullptr;
+    CloseClipboard();
+    if (!ok) GlobalFree(mem);
+    return ok;
+}
+
+static void CopySelection(ViewerState* state, HANDLE hDlg) {
+    const std::wstring text = SelectionText(state);
+    if (text.empty()) {
+        Say(state, hDlg, L"nothing selected");
+        return;
+    }
+    if (!PutClipboard(text)) {
+        Say(state, hDlg, L"clipboard unavailable");
+        return;
+    }
+    Say(state, hDlg, L"copied " + std::to_wstring(text.size()));
+}
+
+// FAR hands DN_INPUT records in console coordinates, so the item origin comes from the dialog.
+// The result is a visual row plus a column inside it, which SetCaret turns into a SelPoint.
+static bool PointFromMouse(ViewerState* state, HANDLE hDlg, const MOUSE_EVENT_RECORD& ms,
+                           size_t& vIdx, size_t& local) {
+    SMALL_RECT dlg{};
+    SMALL_RECT item{};
+    if (!state->info->SendDlgMessage(hDlg, DM_GETDLGRECT, 0, &dlg)) return false;
+    if (!state->info->SendDlgMessage(hDlg, DM_GETITEMPOSITION, 1, &item)) return false;
+    const int x = ms.dwMousePosition.X - (dlg.Left + item.Left);
+    const int y = ms.dwMousePosition.Y - (dlg.Top + item.Top);
+    if (x < 0 || y < 0 || x >= state->viewWidth || y >= state->viewHeight) return false;
+    EnsureVisuals(state);
+    const size_t v = state->topVisual + static_cast<size_t>(y);
+    if (v >= state->visuals.size()) return false;
+    const ViewerRow& row = state->visuals[v];
+    const int origin = row.scrollable ? state->hScroll : 0;
+    size_t col = static_cast<size_t>(x > 1 ? x - 1 : 0);
+    if (origin > 0) col += static_cast<size_t>(origin);
+    if (col > row.cells.size()) col = row.cells.size();
+    vIdx = v;
+    local = col;
+    return true;
+}
+
+static void SelectWord(ViewerState* state, HANDLE hDlg, size_t vIdx, size_t local) {
+    EnsureVisuals(state);
+    if (vIdx >= state->visuals.size()) return;
+    const ViewerRow& row = state->visuals[vIdx];
+    if (row.cells.empty()) return;
+    auto word = [](wchar_t ch) { return iswalnum(ch) != 0 || ch == L'_' || ch > 0x7F; };
+    if (local >= row.cells.size()) local = row.cells.size() - 1;
+    if (!word(row.cells[local].ch)) {
+        if (local == 0) return;
+        --local;
+        if (!word(row.cells[local].ch)) return;
+    }
+    size_t a = local;
+    size_t b = local + 1;
+    while (a > 0 && word(row.cells[a - 1].ch)) --a;
+    while (b < row.cells.size() && word(row.cells[b].ch)) ++b;
+    state->hasSel = true;
+    state->selAnchor = SelPoint{ row.source, row.origin + a };
+    SetCaret(state, hDlg, vIdx, b, false);
+}
+
+static bool HandleMouseInput(ViewerState* state, HANDLE hDlg, const INPUT_RECORD* rec) {
+    const MOUSE_EVENT_RECORD& ms = rec->Event.MouseEvent;
+    const bool left = (ms.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+    if (ms.dwEventFlags == MOUSE_MOVED) {
+        // Without swallowing the move Far would start dragging the whole dialog instead.
+        if (!state->dragging || !left) return true;
+        size_t v = 0;
+        size_t local = 0;
+        if (!PointFromMouse(state, hDlg, ms, v, local)) return true;
+        // While extending, the cell under the cursor belongs to the selection: +1 so a one cell
+        // drag picks a character instead of nothing, the way Far's editor counts it.
+        state->dragged = true;
+        SetCaret(state, hDlg, v, local + 1, false);
+        return false;
+    }
+    if (ms.dwEventFlags != 0 && ms.dwEventFlags != DOUBLE_CLICK) return true;
+    size_t v = 0;
+    size_t local = 0;
+    if (!PointFromMouse(state, hDlg, ms, v, local)) {
+        state->dragging = false;
+        return true;
+    }
+    if (!left) {
+        if (!state->dragging) return true;
+        // Releasing where the press landed stays a click: the cell under the cursor is only
+        // included once the pointer has actually been dragged over it.
+        state->dragging = false;
+        SetCaret(state, hDlg, v, local + (state->dragged ? 1 : 0), false);
+        return true;
+    }
+    if (ms.dwEventFlags == DOUBLE_CLICK) {
+        state->dragging = false;
+        SelectWord(state, hDlg, v, local);
+        return true;
+    }
+    state->dragging = true;
+    state->dragged = false;
+    SetCaret(state, hDlg, v, local, true);
+    return true;
+}
+
+static void FollowLink(ViewerState* state, HANDLE hDlg) {
+    std::vector<const StyledSegment*> links = LinksOn(state);
+    if (links.empty()) {
+        Say(state, hDlg, L"no link on this line");
+        return;
+    }
+    if (state->linkPick >= links.size()) state->linkPick = 0;
+    const std::wstring target = links[state->linkPick]->hint;
+
+    if (target[0] == L'#') {
+        size_t source = 0;
+        if (!FindAnchor(state, target.substr(1), source)) {
+            Say(state, hDlg, L"no heading " + target);
+            return;
+        }
+        state->history.push_back(state->currentLine);
+        GoSource(state, source, hDlg);
+        return;
+    }
+
+    if (OpenLinkedMarkdown(state->filepath, target)) {
+        // A nested viewer has just closed: the console size may differ and its cells are stale.
+        state->builtWidth = -1;
+        MoveVisual(state, state->currentVisual, hDlg);
+        return;
+    }
+    Say(state, hDlg, L"cannot open " + target);
+}
+
+static void GoBack(ViewerState* state, HANDLE hDlg) {
+    if (state->history.empty()) return;
+    const size_t source = state->history.back();
+    state->history.pop_back();
+    GoSource(state, source, hDlg);
 }
 
 static std::wstring SearchText(const StyledLine& line) {
@@ -770,6 +1179,14 @@ static intptr_t WINAPI ViewerDlgProc(HANDLE hDlg, intptr_t Msg, intptr_t Param1,
         return 1;
     }
 
+    // DM_SETINPUTNOTIFY routes every raw record here before Far dispatches it, which is
+    // the only way to see mouse moves: button events alone cannot drag a selection.
+    if (Msg == DN_INPUT && state->lines && Param2) {
+        auto* rec = reinterpret_cast<const INPUT_RECORD*>(Param2);
+        if (rec->EventType == MOUSE_EVENT) return HandleMouseInput(state, hDlg, rec);
+        return 1;
+    }
+
     if (Msg == DN_CONTROLINPUT && state->lines) {
         auto* rec = reinterpret_cast<const INPUT_RECORD*>(Param2);
         if (rec && rec->EventType == MOUSE_EVENT && (rec->Event.MouseEvent.dwEventFlags & 0x0004)) {
@@ -793,6 +1210,8 @@ static intptr_t WINAPI ViewerDlgProc(HANDLE hDlg, intptr_t Msg, intptr_t Param1,
                     state->info->SendDlgMessage(hDlg, DM_CLOSE, -1, nullptr);
                     return 1;
                 case VK_UP:
+                    if (shift && !ctrl) { ExtendSel(state, hDlg, SelMove::Up); return 1; }
+                    ClearSel(state);
                     if (ctrl) {
                         size_t source = state->currentLine;
                         while (source > 0) {
@@ -805,6 +1224,8 @@ static intptr_t WINAPI ViewerDlgProc(HANDLE hDlg, intptr_t Msg, intptr_t Param1,
                     }
                     return 1;
                 case VK_DOWN:
+                    if (shift && !ctrl) { ExtendSel(state, hDlg, SelMove::Down); return 1; }
+                    ClearSel(state);
                     if (ctrl) {
                         size_t source = state->currentLine;
                         while (source + 1 < state->lines->size()) {
@@ -817,23 +1238,33 @@ static intptr_t WINAPI ViewerDlgProc(HANDLE hDlg, intptr_t Msg, intptr_t Param1,
                     }
                     return 1;
                 case VK_PRIOR:
+                    if (shift) { ExtendSel(state, hDlg, SelMove::PageUp); return 1; }
+                    ClearSel(state);
                     MoveVisual(state, state->currentVisual > static_cast<size_t>(page)
                         ? state->currentVisual - page : 0, hDlg);
                     return 1;
                 case VK_NEXT:
+                    if (shift) { ExtendSel(state, hDlg, SelMove::PageDown); return 1; }
+                    ClearSel(state);
                     MoveVisual(state, state->currentVisual + static_cast<size_t>(page), hDlg);
                     return 1;
                 case VK_LEFT:
+                    if (shift && !ctrl) { ExtendSel(state, hDlg, SelMove::Left); return 1; }
+                    ClearSel(state);
                     if (!state->visuals.empty() && state->visuals[state->currentVisual].scrollable)
                         state->hScroll = std::max(0, state->hScroll - (ctrl ? 20 : 4));
                     MoveVisual(state, state->currentVisual, hDlg);
                     return 1;
                 case VK_RIGHT:
+                    if (shift && !ctrl) { ExtendSel(state, hDlg, SelMove::Right); return 1; }
+                    ClearSel(state);
                     if (!state->visuals.empty() && state->visuals[state->currentVisual].scrollable)
                         state->hScroll += ctrl ? 20 : 4;
                     MoveVisual(state, state->currentVisual, hDlg);
                     return 1;
                 case VK_HOME:
+                    if (shift && !ctrl) { ExtendSel(state, hDlg, SelMove::RowStart); return 1; }
+                    ClearSel(state);
                     if (ctrl || state->hScroll == 0) {
                         state->hScroll = 0;
                         MoveVisual(state, 0, hDlg);
@@ -843,11 +1274,36 @@ static intptr_t WINAPI ViewerDlgProc(HANDLE hDlg, intptr_t Msg, intptr_t Param1,
                     }
                     return 1;
                 case VK_END:
+                    if (shift && !ctrl) { ExtendSel(state, hDlg, SelMove::RowEnd); return 1; }
+                    ClearSel(state);
                     state->hScroll = 0;
                     MoveVisual(state, state->visuals.empty() ? 0 : state->visuals.size() - 1, hDlg);
                     return 1;
+                case VK_INSERT:
+                    if (ctrl || shift) CopySelection(state, hDlg);
+                    return 1;
+                case 'C':   // winuser.h has no VK_C; the letter virtual keys are the ASCII codes
+                    if (!ctrl) break;
+                    CopySelection(state, hDlg);
+                    return 1;
+                case VK_RETURN:
+                    FollowLink(state, hDlg);
+                    return 1;
+                case VK_BACK:
+                    GoBack(state, hDlg);
+                    return 1;
+                case VK_TAB: {
+                    const auto links = LinksOn(state);
+                    if (links.empty()) break;
+                    const size_t count = links.size();
+                    const size_t pick = state->linkPick >= count ? 0 : state->linkPick;
+                    state->linkPick = shift ? (pick + count - 1) % count : (pick + 1) % count;
+                    UpdateStatus(state, hDlg);
+                    return 1;
+                }
                 case VK_F2:
                     state->rawMode = !state->rawMode;
+                    ClearSel(state);
                     state->builtWidth = -1;
                     MoveVisual(state, state->currentVisual, hDlg);
                     return 1;
@@ -915,7 +1371,8 @@ void ShowMarkdownViewer(
     const PluginStartupInfo& info,
     const std::vector<StyledLine>& lines,
     const std::wstring& filename,
-    const std::wstring& /*filepath*/)
+    const std::wstring& filepath,
+    const std::wstring& anchor)
 {
     constexpr int ACTL_GETFARRECT = 24;
 
@@ -939,15 +1396,24 @@ void ShowMarkdownViewer(
     state.info = &info;
     state.lines = &lines;
     state.title = L" " + filename + L" ";
+    state.filepath = filepath;
+    state.anchors = BuildAnchors(lines);
     state.topLine = 0;
     state.currentLine = 0;
     state.viewWidth = viewWidth;
     state.viewHeight = viewHeight;
     state.rawMode = false;
     state.buffer.assign(static_cast<size_t>(kMaxDlgW) * kMaxDlgH, FAR_CHAR_INFO{});
+    if (!anchor.empty()) {
+        const std::wstring fragment = anchor[0] == L'#' ? anchor.substr(1) : anchor;
+        size_t source = 0;
+        if (FindAnchor(&state, fragment, source))
+            state.currentLine = source;
+    }
     UpdateStatus(&state, nullptr);
     RenderBuffer(&state);
 
+    ViewerState* outer = g_viewerState;
     g_viewerState = &state;
 
     std::vector<FarDialogItem> items(3);
@@ -989,9 +1455,10 @@ void ShowMarkdownViewer(
         0);
 
     if (hDlg && hDlg != INVALID_HANDLE_VALUE) {
+        info.SendDlgMessage(hDlg, DM_SETINPUTNOTIFY, 1, nullptr);
         info.DialogRun(hDlg);
         info.DialogFree(hDlg);
     }
 
-    g_viewerState = nullptr;
+    g_viewerState = outer;
 }

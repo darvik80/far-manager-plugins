@@ -115,6 +115,79 @@ static bool IsMarkdownFile(const std::wstring& path) {
     return ext == L".md" || ext == L".markdown" || ext == L".mdown" || ext == L".mkd";
 }
 
+static bool ShowMarkdownFile(const std::wstring& path, const std::wstring& anchor, bool reportEmpty) {
+    std::vector<std::wstring> rawLines;
+    ReadFileLines(path, rawLines);
+
+    if (rawLines.empty()) {
+        if (reportEmpty) {
+            const wchar_t* msg[] = {
+                L"Markdown Viewer",
+                L"",
+                L"File is empty or could not be read.",
+            };
+            g_info.Message(MainGuid, MenuGuid, FMSG_MB_OK, nullptr, msg, 3, 1);
+        }
+        return false;
+    }
+
+    MarkdownParser parser;
+    auto styledLines = parser.Parse(rawLines);
+
+    std::wstring filename = std::filesystem::path(path).filename().wstring();
+    ShowMarkdownViewer(g_info, styledLines, filename, path, anchor);
+    return true;
+}
+
+static std::wstring UrlDecode(const std::wstring& text) {
+    auto hex = [](wchar_t ch) -> int {
+        if (ch >= L'0' && ch <= L'9') return ch - L'0';
+        const wchar_t lower = static_cast<wchar_t>(towlower(ch));
+        return lower >= L'a' && lower <= L'f' ? lower - L'a' + 10 : -1;
+    };
+    std::wstring out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == L'%' && i + 2 < text.size()) {
+            const int hi = hex(text[i + 1]);
+            const int lo = hex(text[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<wchar_t>(hi * 16 + lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(text[i]);
+    }
+    return out;
+}
+
+bool OpenLinkedMarkdown(const std::wstring& filepath, const std::wstring& target) {
+    if (target.empty()) return false;
+
+    std::wstring path = target;
+    std::wstring anchor;
+    const size_t hash = path.find(L'#');
+    if (hash != std::wstring::npos) {
+        anchor = path.substr(hash + 1);
+        path.resize(hash);
+    }
+    path = UrlDecode(path);
+
+    std::filesystem::path dest(path);
+    if (dest.is_relative() && !filepath.empty())
+        dest = std::filesystem::path(filepath).parent_path() / dest;
+    std::error_code error;
+    dest = std::filesystem::weakly_canonical(dest, error);
+
+    const std::wstring full = dest.wstring();
+    if (!IsMarkdownFile(full) || !std::filesystem::is_regular_file(full, error)) return false;
+    return ShowMarkdownFile(full, anchor, true);
+}
+
+// One declaration of the version: Far shows it in the plugin manager, the About dialog prints it.
+static constexpr VersionInfo kVersion = { 1, 7, 0, 1, VS_RELEASE };
+
 extern "C" {
 
 void WINAPI SetStartupInfoW(const PluginStartupInfo* Info) {
@@ -129,11 +202,7 @@ void WINAPI GetGlobalInfoW(GlobalInfo* Info) {
     Info->MinFarVersion.Revision = FARMANAGERVERSION_REVISION;
     Info->MinFarVersion.Build = FARMANAGERVERSION_BUILD;
     Info->MinFarVersion.Stage = FARMANAGERVERSION_STAGE;
-    Info->Version.Major = 1;
-    Info->Version.Minor = 5;
-    Info->Version.Revision = 0;
-    Info->Version.Build = 1;
-    Info->Version.Stage = VS_RELEASE;
+    Info->Version = kVersion;
     Info->Guid = MainGuid;
     Info->Title = L"Markdown Viewer";
     Info->Description = L"View Markdown files with syntax highlighting";
@@ -187,33 +256,18 @@ HANDLE WINAPI OpenW(const OpenInfo* Info) {
         return nullptr;
     }
 
-    std::vector<std::wstring> rawLines;
-    ReadFileLines(path, rawLines);
-
-    if (rawLines.empty()) {
-        const wchar_t* msg[] = {
-            L"Markdown Viewer",
-            L"",
-            L"File is empty or could not be read.",
-        };
-        g_info.Message(MainGuid, MenuGuid, FMSG_MB_OK, nullptr, msg, 3, 1);
-        return nullptr;
-    }
-
-    MarkdownParser parser;
-    auto styledLines = parser.Parse(rawLines);
-
-    std::wstring filename = std::filesystem::path(path).filename().wstring();
-    ShowMarkdownViewer(g_info, styledLines, filename, path);
-
+    ShowMarkdownFile(path, L"", true);
     return nullptr;
 }
 
 intptr_t WINAPI ConfigureW(const ConfigureInfo*) {
+    const std::wstring version = L"Version " + std::to_wstring(kVersion.Major) + L"." +
+        std::to_wstring(kVersion.Minor) + L"." + std::to_wstring(kVersion.Revision) + L"." +
+        std::to_wstring(kVersion.Build);
     const wchar_t* msg[] = {
         L"Markdown Viewer",
         L"",
-        L"Version 1.0",
+        version.c_str(),
         L"",
         L"No configurable options yet.",
     };

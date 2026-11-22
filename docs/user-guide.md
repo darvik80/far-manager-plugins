@@ -100,6 +100,8 @@ Drive `5`, `F11`, or `email:`. IMAP with SSL (port 993) or without (143).
 
 In the viewer: `F8` / `Shift+F8` theme (shared 16-color palette), `F7` find, `Esc` exit. Pretty also has `F2` — raw text.
 
+Markdown renders HTML tags found in the document too, and adds selection and links: drag the mouse, double-click for a word, or hold `Shift` with the arrows / `Home` / `End`; `Ctrl+Ins`, `Shift+Ins` or `Ctrl+C` puts the selection in the clipboard. `Enter` follows a link on the current line — a `#heading` or another `.md` file — `Tab` picks between several, `Backspace` goes back.
+
 ### Install
 
 Release build: [Releases](https://github.com/darvik80/far-manager-plugins/releases) → `install.bat`.
@@ -207,6 +209,8 @@ PAT — DPAPI. `http://` только для localhost.
 ![Просмотр Markdown](images/md-view.png)
 
 В просмотре: `F8` / `Shift+F8` тема (общая палитра на 16 цветов), `F7` поиск, `Esc` выход. Pretty ещё `F2` — сырой текст.
+
+Markdown рендерит найденные в документе HTML-теги, а ещё умеет выделение и ссылки: тянуть мышью, двойной клик — слово, либо `Shift` + стрелки / `Home` / `End`; `Ctrl+Ins`, `Shift+Ins` или `Ctrl+C` кладут выделенное в буфер. `Enter` переходит по ссылке на текущей строке — на заголовок `#…` или в другой `.md`, `Tab` выбирает из нескольких, `Backspace` — назад.
 
 ### Установка
 
